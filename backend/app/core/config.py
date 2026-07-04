@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     
     # Gemini
     gemini_api_key: Optional[str] = None
-    gemini_model: str = Field(default="gemini-1.5-pro-latest")
+    gemini_model: str = Field(default="gemini-2.0-flash")
     
     # LangGraph
     langchain_api_key: Optional[str] = None

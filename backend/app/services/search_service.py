@@ -10,7 +10,8 @@ from app.core.config import settings
 
 logger = structlog.get_logger()
 
-VECTOR_SIZE = 768
+# gemini-embedding-001 emits 3072-dim vectors; the deterministic fallback matches this size.
+VECTOR_SIZE = 3072
 
 
 class DeterministicEmbeddingProvider:
@@ -35,7 +36,7 @@ class SearchService:
         self.qdrant = QdrantClient(url=settings.qdrant_url)
         if settings.gemini_api_key:
             self.embeddings = GoogleGenerativeAIEmbeddings(
-                model="models/embedding-001",
+                model="models/gemini-embedding-001",
                 google_api_key=settings.gemini_api_key
             )
         else:

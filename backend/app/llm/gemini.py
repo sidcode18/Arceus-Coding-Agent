@@ -1,13 +1,25 @@
 import structlog
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.config import settings
 from app.llm.base import LLMProvider
 
 logger = structlog.get_logger()
+
+
+def _to_gemini_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """Unwrap an OpenAI-style tool schema into a flat function declaration.
+
+    OpenAI tools are shaped as ``{"type": "function", "function": {...}}`` while
+    langchain-google-genai expects the inner ``{"name", "description",
+    "parameters"}`` object directly.
+    """
+    if isinstance(tool, dict) and tool.get("type") == "function" and "function" in tool:
+        return tool["function"]
+    return tool
 
 
 class GeminiProvider(LLMProvider):
@@ -35,9 +47,10 @@ class GeminiProvider(LLMProvider):
         
         model = self.llm
         if tools:
-            # Note: tools must be formatted for OpenAI/Gemini compatible schema
-            # We can use LangChain's standard formatting for tools
-            model = model.bind_tools(tools)
+            # langchain-google-genai expects flat function declarations, not the
+            # OpenAI ``{"type": "function", "function": {...}}`` envelope; passing
+            # the wrapped form yields empty function names and a 400 from Gemini.
+            model = model.bind_tools([_to_gemini_tool(tool) for tool in tools])
             
         logger.info("Generating with Gemini", model=self.model_name)
         response = await model.ainvoke(messages)
