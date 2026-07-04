@@ -1,6 +1,6 @@
 import structlog
-from typing import Dict, Any, List
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from typing import Dict, Any
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
 from app.llm.factory import LLMFactory
@@ -92,11 +92,16 @@ Always provide clear explanations for your actions.
                         tool = self.tool_registry.get_tool(tool_name)
                         result = await tool.execute(**tool_args)
                         
-                        # Record the change
+                        # Record the change using a consistent schema so
+                        # downstream agents (e.g. the reviewer) can inspect the
+                        # actual file paths and modified content.
                         code_changes.append({
                             "tool": tool_name,
-                            "args": tool_args,
-                            "result": result
+                            "file_path": tool_args.get("file_path", ""),
+                            "content": tool_args.get("content", ""),
+                            "command": tool_args.get("command", ""),
+                            "result": result,
+                            "error": None,
                         })
                         
                         logger.info("CoderAgent executed tool", tool=tool_name)
@@ -105,8 +110,11 @@ Always provide clear explanations for your actions.
                         logger.error("CoderAgent tool execution failed", tool=tool_name, error=str(e))
                         code_changes.append({
                             "tool": tool_name,
-                            "args": tool_args,
-                            "error": str(e)
+                            "file_path": tool_args.get("file_path", ""),
+                            "content": tool_args.get("content", ""),
+                            "command": tool_args.get("command", ""),
+                            "result": None,
+                            "error": str(e),
                         })
             
             return {

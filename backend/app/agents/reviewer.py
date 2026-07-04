@@ -20,7 +20,6 @@ class ReviewerAgent(BaseAgent):
         """Review the code changes made by the Coder agent"""
         logger.info("ReviewerAgent reviewing code changes")
         
-        messages = state.get("messages", [])
         code_changes = state.get("code_changes", [])
         
         if not code_changes:
@@ -43,11 +42,26 @@ Provide your review in the following format:
 - Suggestions for improvement
 """
         
-        # Format code changes for review
-        code_diff = "\n\n".join([
-            f"File: {change.get('file_path', 'unknown')}\nChanges:\n{change.get('content', '')}"
-            for change in code_changes
-        ])
+        # Format code changes for review using the consistent schema emitted
+        # by the CoderAgent ({tool, file_path, content, command, result}).
+        change_blocks = []
+        for change in code_changes:
+            tool = change.get("tool", "unknown")
+            if change.get("error"):
+                change_blocks.append(f"Tool `{tool}` FAILED: {change['error']}")
+            elif change.get("command"):
+                result = change.get("result") or {}
+                change_blocks.append(
+                    f"Command executed: {change['command']}\n"
+                    f"stdout:\n{result.get('stdout', '')}\n"
+                    f"stderr:\n{result.get('stderr', '')}"
+                )
+            else:
+                change_blocks.append(
+                    f"File: {change.get('file_path') or 'unknown'}\n"
+                    f"New content:\n{change.get('content', '')}"
+                )
+        code_diff = "\n\n".join(change_blocks)
         
         review_messages = [
             SystemMessage(content=system_prompt),

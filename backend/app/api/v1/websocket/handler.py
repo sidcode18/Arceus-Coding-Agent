@@ -53,35 +53,43 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     "project_id": project_id
                 }
                 
-                # Stream the workflow execution with node updates
+                # Stream the workflow execution with node updates.
+                # LangGraph's astream (stream_mode="updates") yields a dict
+                # mapping each executed node name to the partial state it
+                # returned, e.g. {"planner": {"plan": "...", "messages": [...]}}.
                 async for event in workflow.astream(initial_state):
-                    # Extract node name and state
-                    if hasattr(event, 'node'):
-                        node_name = event.node
-                        state = event.state if hasattr(event, 'state') else {}
-                        
+                    for node_name, node_state in event.items():
+                        if not isinstance(node_state, dict):
+                            continue
+
                         # Send node update
                         await websocket.send_json({
                             "event": "node_update",
                             "node": node_name,
                             "state": {
-                                "status": state.get("status", "in_progress"),
-                                "plan": state.get("plan", ""),
-                                "plan_steps": state.get("plan_steps", []),
-                                "code_changes": state.get("code_changes", []),
-                                "review_status": state.get("review_status", ""),
-                                "reflection_action": state.get("reflection_action", ""),
-                                "errors": state.get("errors", [])
+                                "status": node_state.get("status", "in_progress"),
+                                "plan": node_state.get("plan", ""),
+                                "plan_steps": node_state.get("plan_steps", []),
+                                "code_changes": node_state.get("code_changes", []),
+                                "review_status": node_state.get("review_status", ""),
+                                "reflection_action": node_state.get("reflection_action", ""),
+                                "errors": node_state.get("errors", [])
                             }
                         })
-                        
-                        # Send latest message if available
-                        messages = state.get("messages", [])
+
+                        # Send latest message produced by this node if available
+                        messages = node_state.get("messages", [])
                         if messages:
                             latest_message = messages[-1]
+                            content = (
+                                latest_message.content
+                                if hasattr(latest_message, "content")
+                                else str(latest_message)
+                            )
                             await websocket.send_json({
                                 "event": "message_update",
-                                "content": latest_message.content if hasattr(latest_message, 'content') else str(latest_message),
+                                "node": node_name,
+                                "content": content,
                                 "type": latest_message.__class__.__name__
                             })
                 

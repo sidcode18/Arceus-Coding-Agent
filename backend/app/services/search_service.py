@@ -74,8 +74,9 @@ class SearchService:
         text = chunk["content"]
         vector = self.embeddings.embed_query(text)
         
-        metadata = chunk["metadata"]
-        metadata["project_id"] = project_id
+        # Store the chunk content alongside its metadata so retrieval can
+        # surface the actual code, not just its location.
+        metadata = {**chunk["metadata"], "content": text, "project_id": project_id}
         
         import uuid
         point_id = str(uuid.uuid4())

@@ -1,53 +1,69 @@
-import os
-from typing import Any
 import structlog
+from typing import Any
 
 from app.tools.base import BaseTool
 from app.tools.registry import ToolRegistry
+from app.services.repository import repository_manager
 
 logger = structlog.get_logger()
 
+
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Read the contents of a file at a specific path"
-    
-    async def execute(self, file_path: str, **kwargs) -> Any:
-        logger.info("Executing ReadFileTool", path=file_path)
-        
-        # Security: Path traversal protection
-        abs_path = os.path.abspath(file_path)
-        workspace_root = os.path.abspath(kwargs.get("workspace_root", "/"))
-        if os.path.commonpath([workspace_root, abs_path]) != workspace_root:
-            return {"error": "Security Error: Path traversal detected. Access denied."}
-            
-        if not os.path.exists(abs_path):
+    description = "Read the contents of a file inside the project workspace"
+    parameters = {
+        "file_path": {
+            "type": "string",
+            "description": "Path of the file relative to the project root",
+        }
+    }
+    required = ["file_path"]
+
+    async def execute(self, file_path: str, project_id: str = None, **kwargs) -> Any:
+        logger.info("Executing ReadFileTool", path=file_path, project_id=project_id)
+
+        if not project_id:
+            return {"error": "project_id is required to resolve the workspace"}
+
+        try:
+            content = await repository_manager.read_file(project_id, file_path)
+            return {"content": content}
+        except ValueError as e:
+            # Raised by RepositoryManager on path traversal attempts
+            return {"error": f"Security Error: {e}"}
+        except FileNotFoundError:
             return {"error": "File not found"}
-            
-        with open(abs_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            
-        return {"content": content}
+        except IsADirectoryError as e:
+            return {"error": str(e)}
+
 
 class WriteFileTool(BaseTool):
     name = "write_file"
-    description = "Write content to a file at a specific path"
-    
-    async def execute(self, file_path: str, content: str, **kwargs) -> Any:
-        logger.info("Executing WriteFileTool", path=file_path)
-        
-        # Security: Path traversal protection
-        abs_path = os.path.abspath(file_path)
-        workspace_root = os.path.abspath(kwargs.get("workspace_root", "/"))
-        if os.path.commonpath([workspace_root, abs_path]) != workspace_root:
-            return {"error": "Security Error: Path traversal detected. Access denied."}
-            
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        
-        with open(abs_path, "w", encoding="utf-8") as f:
-            f.write(content)
-            
-        return {"status": "success", "file_path": abs_path}
+    description = "Write content to a file inside the project workspace"
+    parameters = {
+        "file_path": {
+            "type": "string",
+            "description": "Path of the file relative to the project root",
+        },
+        "content": {
+            "type": "string",
+            "description": "The full content to write to the file",
+        },
+    }
+    required = ["file_path", "content"]
+
+    async def execute(self, file_path: str, content: str, project_id: str = None, **kwargs) -> Any:
+        logger.info("Executing WriteFileTool", path=file_path, project_id=project_id)
+
+        if not project_id:
+            return {"error": "project_id is required to resolve the workspace"}
+
+        try:
+            await repository_manager.write_file(project_id, file_path, content)
+            return {"status": "success", "file_path": file_path}
+        except ValueError as e:
+            return {"error": f"Security Error: {e}"}
+
 
 # Register tools
 ToolRegistry.register(ReadFileTool())

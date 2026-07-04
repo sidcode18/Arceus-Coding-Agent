@@ -71,11 +71,8 @@ def index_file(self, project_id: str, file_path: str):
         # Read the file
         content = run_async(repository_manager.read_file(project_id, file_path))
         
-        # Chunk it
-        chunks = chunking_service.chunk_text(
-            content, 
-            metadata={"file_path": file_path}
-        )
+        # Chunk it using language-aware AST chunking (falls back to text)
+        chunks = chunking_service.chunk_file(content, file_path)
         
         # Index each chunk
         for chunk in chunks:
