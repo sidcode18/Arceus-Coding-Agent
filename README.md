@@ -1,11 +1,11 @@
-# AI Coding Agent 🚀
+# AI Coding Agent 
 
 [![CI Pipeline](https://github.com/your-username/ai-coding-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/ai-coding-agent/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An enterprise-grade, autonomous AI coding assistant built on **FastAPI**, **LangGraph**, **React**, and **Qdrant**. This project provides a complete infrastructure to run LLM-powered coding agents capable of cloning repositories, analyzing code with AST parsing, performing semantic code search, and writing complex features autonomously.
 
-## 🌟 Key Features
+## Key Features
 
 - **Multi-Agent Architecture:** Utilizes LangGraph to orchestrate specialized agents (Planner, Coder, Reviewer, Supervisor).
 - **Advanced Code Understanding:** Uses AST parsers (Python, TypeScript) and Qdrant vector database for deep semantic code retrieval.
@@ -13,7 +13,7 @@ An enterprise-grade, autonomous AI coding assistant built on **FastAPI**, **Lang
 - **Real-time Observability:** Streams agent thoughts and actions in real-time via WebSockets to a sleek React frontend.
 - **Production-Ready Backend:** Fully asynchronous FastAPI backend, powered by PostgreSQL (SQLAlchemy) and Redis.
 
-## 🏗 Architecture
+## Architecture
 
 The system follows Clean Architecture principles:
 - **Frontend**: Vite + React + TailwindCSS + Monaco Editor.
@@ -22,7 +22,7 @@ The system follows Clean Architecture principles:
 - **Memory & Storage**: PostgreSQL for long-term memory, Redis for short-term fast retrieval, Qdrant for semantic code vectors.
 - **Observability**: Prometheus metrics, Grafana dashboards, and structured logging via `structlog`.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Docker & Docker Compose
@@ -53,19 +53,19 @@ npm install
 npm run dev
 ```
 
-## 🔒 Security
+## Security
 - Strict JWT authentication on all routes.
 - Path traversal protection on all file-system tools.
 - Command validation to prevent destructive terminal operations (`rm -rf`, `mkfs`, etc.).
 - Robust secret masking (using `structlog` filters for API keys).
 
-## 📊 Observability
+## Observability
 - Access Prometheus metrics at `localhost:9090`
 - Access Grafana at `localhost:3001` (login: `admin` / `admin`)
 - OpenTelemetry traces are instrumented across FastAPI and LangChain.
 
-## 🤝 Contributing
+## Contributing
 Contributions are welcome! Please read our [Contribution Guidelines](docs/CONTRIBUTING.md) and ensure that all new tools and endpoints include `pytest` coverage.
 
-## 📝 License
+## License
 This project is licensed under the MIT License.
