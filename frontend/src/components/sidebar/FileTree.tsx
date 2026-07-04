@@ -1,193 +1,107 @@
-import React, { useState } from 'react';
-import { 
-  Folder, 
-  FolderOpen, 
-  File, 
-  ChevronRight, 
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Folder,
+  FolderOpen,
+  File,
+  ChevronRight,
   ChevronDown,
-  Plus,
-  Search,
+  RefreshCw,
   GitBranch,
-  MoreVertical,
   FileCode,
   FileText,
   FileJson,
-  Image,
-  Globe
+  Globe,
+  AlertCircle,
 } from 'lucide-react';
-
-interface FileNode {
-  id: string;
-  name: string;
-  type: 'file' | 'folder';
-  children?: FileNode[];
-  gitStatus?: 'added' | 'modified' | 'deleted' | 'none';
-  language?: string;
-}
+import { api, extractError } from '../../api/client';
+import type { TreeNode } from '../../api/types';
+import { languageFromName } from '../../lib/language';
+import { LoadingSpinner } from '../ui/LoadingSpinner';
+import { EmptyState } from '../ui/EmptyState';
 
 interface FileTreeProps {
-  onFileSelect: (file: FileNode) => void;
-  selectedFile?: FileNode;
+  projectId: string;
+  branch: string;
+  reloadToken: number;
+  activePath?: string;
+  changedPaths: Set<string>;
+  onFileSelect: (path: string, name: string) => void;
 }
 
-const mockFileTree: FileNode[] = [
-  {
-    id: '1',
-    name: 'src',
-    type: 'folder',
-    gitStatus: 'modified',
-    children: [
-      {
-        id: '2',
-        name: 'components',
-        type: 'folder',
-        children: [
-          { id: '3', name: 'Button.tsx', type: 'file', gitStatus: 'modified', language: 'typescript' },
-          { id: '4', name: 'Card.tsx', type: 'file', gitStatus: 'none', language: 'typescript' },
-          { id: '5', name: 'Modal.tsx', type: 'file', gitStatus: 'added', language: 'typescript' },
-        ],
-      },
-      {
-        id: '6',
-        name: 'hooks',
-        type: 'folder',
-        children: [
-          { id: '7', name: 'useTheme.ts', type: 'file', gitStatus: 'none', language: 'typescript' },
-          { id: '8', name: 'useAuth.ts', type: 'file', gitStatus: 'none', language: 'typescript' },
-        ],
-      },
-      {
-        id: '9',
-        name: 'utils',
-        type: 'folder',
-        children: [
-          { id: '10', name: 'helpers.ts', type: 'file', gitStatus: 'added', language: 'typescript' },
-          { id: '11', name: 'api.ts', type: 'file', gitStatus: 'none', language: 'typescript' },
-          { id: '12', name: 'constants.ts', type: 'file', gitStatus: 'deleted', language: 'typescript' },
-        ],
-      },
-      { id: '13', name: 'App.tsx', type: 'file', gitStatus: 'modified', language: 'typescript' },
-      { id: '14', name: 'main.tsx', type: 'file', gitStatus: 'none', language: 'typescript' },
-      { id: '15', name: 'index.css', type: 'file', gitStatus: 'none', language: 'css' },
-    ],
-  },
-  {
-    id: '16',
-    name: 'public',
-    type: 'folder',
-    children: [
-      { id: '17', name: 'index.html', type: 'file', gitStatus: 'none', language: 'html' },
-      { id: '18', name: 'favicon.ico', type: 'file', gitStatus: 'none', language: 'image' },
-    ],
-  },
-  {
-    id: '19',
-    name: 'tests',
-    type: 'folder',
-    children: [
-      { id: '20', name: 'App.test.tsx', type: 'file', gitStatus: 'none', language: 'typescript' },
-    ],
-  },
-  { id: '21', name: 'package.json', type: 'file', gitStatus: 'none', language: 'json' },
-  { id: '22', name: 'tsconfig.json', type: 'file', gitStatus: 'none', language: 'json' },
-  { id: '23', name: 'README.md', type: 'file', gitStatus: 'modified', language: 'markdown' },
-  { id: '24', name: '.gitignore', type: 'file', gitStatus: 'none', language: 'text' },
-];
+const fileIcon = (name: string) => {
+  const lang = languageFromName(name);
+  const map: Record<string, React.ElementType> = {
+    typescript: FileCode,
+    javascript: FileCode,
+    python: FileCode,
+    html: Globe,
+    css: FileCode,
+    json: FileJson,
+    markdown: FileText,
+    txt: FileText,
+  };
+  const Icon = map[lang] || File;
+  return <Icon size={14} />;
+};
 
-const FileTreeNode: React.FC<{
-  node: FileNode;
+const fileColor = (name: string) => {
+  const lang = languageFromName(name);
+  const map: Record<string, string> = {
+    typescript: 'text-primary',
+    javascript: 'text-warning',
+    python: 'text-success',
+    html: 'text-error',
+    css: 'text-info',
+    json: 'text-warning',
+    markdown: 'text-text-secondary',
+  };
+  return map[lang] || 'text-text-muted';
+};
+
+const TreeItem: React.FC<{
+  node: TreeNode;
+  path: string;
   level: number;
-  selectedFile?: FileNode;
-  onFileSelect: (file: FileNode) => void;
-}> = ({ node, level, selectedFile, onFileSelect }) => {
-  const [isExpanded, setIsExpanded] = useState(level < 1);
-  const isSelected = selectedFile?.id === node.id;
+  activePath?: string;
+  changedPaths: Set<string>;
+  onFileSelect: (path: string, name: string) => void;
+}> = ({ node, path, level, activePath, changedPaths, onFileSelect }) => {
+  const [expanded, setExpanded] = useState(level < 1);
 
-  const gitStatusColors = {
-    added: 'bg-git-added',
-    modified: 'bg-git-modified',
-    deleted: 'bg-git-deleted',
-    none: 'bg-transparent',
-  };
-
-  const getFileIcon = (language?: string) => {
-    const iconMap: Record<string, React.ElementType> = {
-      typescript: FileCode,
-      javascript: FileCode,
-      python: FileCode,
-      html: Globe,
-      css: FileCode,
-      json: FileJson,
-      markdown: FileText,
-      image: Image,
-      text: FileText,
-    };
-    const Icon = iconMap[language || ''] || File;
-    return <Icon size={14} />;
-  };
-
-  const getFileColor = (language?: string) => {
-    const colorMap: Record<string, string> = {
-      typescript: 'text-primary',
-      javascript: 'text-warning',
-      python: 'text-success',
-      html: 'text-error',
-      css: 'text-info',
-      json: 'text-warning',
-      markdown: 'text-text-secondary',
-      image: 'text-text-secondary',
-      text: 'text-text-muted',
-    };
-    return colorMap[language || ''] || 'text-text-muted';
-  };
-
-  if (node.type === 'folder') {
+  if (node.type === 'directory') {
+    const children = [...(node.children || [])].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
     return (
       <div>
         <div
-          className={`flex items-center gap-2 px-2 py-1.5 hover:bg-background-hover cursor-pointer rounded-md transition-all duration-150 group ${
-            isSelected ? 'bg-background-hover' : ''
-          }`}
+          className="flex items-center gap-1.5 px-2 py-1 hover:bg-background-hover cursor-pointer rounded-md transition-colors"
           style={{ paddingLeft: `${level * 12 + 8}px` }}
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={() => setExpanded((v) => !v)}
         >
-          {isExpanded ? (
-            <ChevronDown size={12} className="text-text-muted transition-transform duration-150" />
+          {expanded ? (
+            <ChevronDown size={12} className="text-text-muted shrink-0" />
           ) : (
-            <ChevronRight size={12} className="text-text-muted transition-transform duration-150" />
+            <ChevronRight size={12} className="text-text-muted shrink-0" />
           )}
-          {isExpanded ? (
-            <FolderOpen size={16} className="text-primary" />
+          {expanded ? (
+            <FolderOpen size={15} className="text-primary shrink-0" />
           ) : (
-            <Folder size={16} className="text-text-secondary" />
+            <Folder size={15} className="text-text-secondary shrink-0" />
           )}
-          <span className="text-sm text-text-primary truncate font-medium">{node.name}</span>
-          {node.gitStatus && node.gitStatus !== 'none' && (
-            <div className={`w-1.5 h-1.5 rounded-full ${gitStatusColors[node.gitStatus]} ml-1`} />
-          )}
-          <div className="ml-auto opacity-0 group-hover:opacity-100 flex gap-0.5">
-            <button 
-              className="p-1 hover:bg-background-elevated rounded transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Plus size={12} className="text-text-muted hover:text-text-primary" />
-            </button>
-            <button 
-              className="p-1 hover:bg-background-elevated rounded transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreVertical size={12} className="text-text-muted hover:text-text-primary" />
-            </button>
-          </div>
+          <span className="text-sm text-text-primary truncate">{node.name}</span>
         </div>
-        {isExpanded && node.children && (
+        {expanded && (
           <div className="animate-fade-in">
-            {node.children.map((child) => (
-              <FileTreeNode
-                key={child.id}
+            {children.map((child) => (
+              <TreeItem
+                key={`${path}/${child.name}`}
                 node={child}
+                path={path ? `${path}/${child.name}` : child.name}
                 level={level + 1}
-                selectedFile={selectedFile}
+                activePath={activePath}
+                changedPaths={changedPaths}
                 onFileSelect={onFileSelect}
               />
             ))}
@@ -197,82 +111,106 @@ const FileTreeNode: React.FC<{
     );
   }
 
+  const isActive = activePath === path;
+  const isChanged = changedPaths.has(path);
   return (
     <div
-      className={`flex items-center gap-2 px-2 py-1.5 hover:bg-background-hover cursor-pointer rounded-md transition-all duration-150 group ${
-        isSelected ? 'bg-background-hover' : ''
+      className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer rounded-md transition-colors ${
+        isActive ? 'bg-primary/15 text-text-primary' : 'hover:bg-background-hover'
       }`}
-      style={{ paddingLeft: `${level * 12 + 24}px` }}
-      onClick={() => onFileSelect(node)}
+      style={{ paddingLeft: `${level * 12 + 22}px` }}
+      onClick={() => onFileSelect(path, node.name)}
     >
-      <div className={getFileColor(node.language)}>
-        {getFileIcon(node.language)}
-      </div>
+      <span className={fileColor(node.name)}>{fileIcon(node.name)}</span>
       <span className="text-sm text-text-primary truncate flex-1">{node.name}</span>
-      {node.gitStatus && node.gitStatus !== 'none' && (
-        <div className={`w-1.5 h-1.5 rounded-full ${gitStatusColors[node.gitStatus]} ml-1`} />
-      )}
-      <div className="ml-auto opacity-0 group-hover:opacity-100 flex gap-0.5">
-        <button 
-          className="p-1 hover:bg-background-elevated rounded transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreVertical size={12} className="text-text-muted hover:text-text-primary" />
-        </button>
-      </div>
+      {isChanged && <span className="w-1.5 h-1.5 rounded-full bg-git-modified shrink-0" />}
     </div>
   );
 };
 
-export const FileTree: React.FC<FileTreeProps> = ({ onFileSelect, selectedFile }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+export const FileTree: React.FC<FileTreeProps> = ({
+  projectId,
+  branch,
+  reloadToken,
+  activePath,
+  changedPaths,
+  onFileSelect,
+}) => {
+  const [tree, setTree] = useState<TreeNode | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.getTree(projectId);
+      setTree(data);
+      setError(null);
+    } catch (err) {
+      setError(extractError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    load();
+  }, [load, reloadToken]);
+
+  const rootChildren = tree?.children
+    ? [...tree.children].sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+    : [];
 
   return (
     <div className="flex flex-col h-full bg-background-sidebar">
-      {/* Header */}
-      <div className="p-3 border-b border-border">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <GitBranch size={16} className="text-primary" />
-            <span className="text-sm font-semibold text-text-primary">Explorer</span>
-            <span className="text-xs text-text-muted bg-background-elevated px-1.5 py-0.5 rounded">main</span>
-          </div>
-          <div className="flex gap-0.5">
-            <button className="p-1.5 hover:bg-background-hover rounded-md transition-colors" title="New File">
-              <Plus size={14} className="text-text-muted hover:text-text-primary" />
-            </button>
-            <button className="p-1.5 hover:bg-background-hover rounded-md transition-colors" title="Collapse All">
-              <ChevronDown size={14} className="text-text-muted hover:text-text-primary" />
-            </button>
-          </div>
+      <div className="flex items-center justify-between px-3 h-9 border-b border-border">
+        <div className="flex items-center gap-2 min-w-0">
+          <GitBranch size={14} className="text-primary shrink-0" />
+          <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">
+            Explorer
+          </span>
+          <span className="text-xs text-text-muted bg-background-elevated px-1.5 py-0.5 rounded truncate">
+            {branch}
+          </span>
         </div>
-        
-        {/* Search */}
-        <div className="relative">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
-          <input
-            type="text"
-            placeholder="Search files..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-background border border-border rounded-md pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
-          />
-        </div>
+        <button
+          onClick={load}
+          className="p-1 hover:bg-background-hover rounded transition-colors text-text-muted hover:text-text-primary"
+          title="Refresh tree"
+        >
+          <RefreshCw size={13} />
+        </button>
       </div>
 
-      {/* File Tree */}
-      <div className="flex-1 overflow-y-auto p-2">
-        <div className="space-y-0.5">
-          {mockFileTree.map((node) => (
-            <FileTreeNode
-              key={node.id}
-              node={node}
+      <div className="flex-1 overflow-y-auto p-1.5">
+        {loading ? (
+          <div className="flex justify-center py-8">
+            <LoadingSpinner />
+          </div>
+        ) : error ? (
+          <EmptyState
+            icon={<AlertCircle size={24} className="text-error" />}
+            title="Tree unavailable"
+            description={error}
+          />
+        ) : rootChildren.length === 0 ? (
+          <EmptyState icon={<Folder size={24} />} title="Empty repository" />
+        ) : (
+          rootChildren.map((child) => (
+            <TreeItem
+              key={child.name}
+              node={child}
+              path={child.name}
               level={0}
-              selectedFile={selectedFile}
+              activePath={activePath}
+              changedPaths={changedPaths}
               onFileSelect={onFileSelect}
             />
-          ))}
-        </div>
+          ))
+        )}
       </div>
     </div>
   );

@@ -1,35 +1,51 @@
 import React from 'react';
-import { GitBranch, GitCommit, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
+import { GitBranch, GitCommit, CheckCircle2, Loader2, FileCode } from 'lucide-react';
 
-export const StatusBar: React.FC = () => {
+interface StatusBarProps {
+  branch: string;
+  changes: number;
+  running: boolean;
+  activeFile?: string;
+  language?: string;
+}
+
+export const StatusBar: React.FC<StatusBarProps> = ({
+  branch,
+  changes,
+  running,
+  activeFile,
+  language,
+}) => {
   return (
     <div className="h-6 bg-background-sidebar border-t border-border flex items-center justify-between px-4 text-xs text-text-secondary select-none">
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5 hover:text-text-primary cursor-pointer transition-colors">
+        <div className="flex items-center gap-1.5">
           <GitBranch size={12} />
-          <span>main</span>
+          <span>{branch}</span>
         </div>
-        <div className="flex items-center gap-1.5 hover:text-text-primary cursor-pointer transition-colors">
+        <div className="flex items-center gap-1.5">
           <GitCommit size={12} />
-          <span>3 changes</span>
+          <span>{changes} pending change{changes === 1 ? '' : 's'}</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <AlertCircle size={12} className="text-warning" />
-          <span>2 warnings</span>
-        </div>
+        {running && (
+          <div className="flex items-center gap-1.5 text-primary">
+            <Loader2 size={12} className="animate-spin" />
+            <span>Agent running</span>
+          </div>
+        )}
       </div>
-      
+
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <Clock size={12} />
-          <span>Ln 42, Col 18</span>
-        </div>
+        {activeFile && (
+          <div className="flex items-center gap-1.5">
+            <FileCode size={12} />
+            <span className="font-mono">{activeFile}</span>
+          </div>
+        )}
+        {language && <span className="capitalize">{language}</span>}
         <div className="flex items-center gap-1.5">
           <CheckCircle2 size={12} className="text-success" />
-          <span>Prettier</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span>Python 3.11</span>
+          <span>Arceus</span>
         </div>
       </div>
     </div>

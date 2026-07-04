@@ -49,3 +49,6 @@ class SearchQuery(BaseModel):
 class SearchResult(BaseModel):
     score: float
     payload: Dict[str, Any]
+
+class TerminalCommandRequest(BaseModel):
+    command: str = Field(..., min_length=1)

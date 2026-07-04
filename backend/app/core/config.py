@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 100
     
     # CORS
-    cors_origins: str = Field(default="http://localhost:3000,http://localhost:8000")
+    cors_origins: str = Field(default="http://localhost:3000,http://localhost:5173,http://localhost:8000")
     cors_allow_credentials: bool = True
     
     @field_validator('cors_origins')

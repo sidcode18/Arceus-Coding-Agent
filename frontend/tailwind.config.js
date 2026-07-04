@@ -7,20 +7,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Cursor/Linear-inspired dark theme
+        // Cursor/Linear-inspired theme, driven by CSS variables (see index.css)
+        // so dark/light switch by flipping data-theme on <html>.
         background: {
-          DEFAULT: '#09090b',
-          elevated: '#18181b',
-          sidebar: '#09090b',
-          editor: '#09090b',
-          panel: '#18181b',
-          border: '#27272a',
-          hover: '#27272a',
+          DEFAULT: 'var(--bg)',
+          elevated: 'var(--bg-elevated)',
+          sidebar: 'var(--bg-sidebar)',
+          editor: 'var(--bg-editor)',
+          panel: 'var(--bg-panel)',
+          border: 'var(--bg-border)',
+          hover: 'var(--bg-hover)',
         },
         text: {
-          primary: '#fafafa',
-          secondary: '#a1a1aa',
-          muted: '#71717a',
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
           accent: '#3b82f6',
           code: '#f472b6',
         },

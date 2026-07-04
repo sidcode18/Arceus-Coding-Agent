@@ -1,16 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from 'lucide-react';
-
-export interface Toast {
-  id: string;
-  type: 'success' | 'error' | 'warning' | 'info';
-  title: string;
-  message?: string;
-  duration?: number;
-}
+import { subscribeToasts, dismissToast, type ToastData } from '../../lib/toast';
 
 interface ToastProps {
-  toast: Toast;
+  toast: ToastData;
   onClose: (id: string) => void;
 }
 
@@ -43,7 +36,7 @@ const ToastItem: React.FC<ToastProps> = ({ toast, onClose }) => {
 
   return (
     <div
-      className={`flex items-start gap-3 p-4 rounded-lg border shadow-panel-lg animate-slide-in-right ${
+      className={`flex items-start gap-3 p-4 rounded-lg border shadow-panel-lg backdrop-blur-sm animate-slide-in-right ${
         bgColors[toast.type]
       } ${!isVisible ? 'opacity-0 translate-x-full' : ''}`}
       style={{ transition: 'all 0.3s ease-out' }}
@@ -52,7 +45,7 @@ const ToastItem: React.FC<ToastProps> = ({ toast, onClose }) => {
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-text-primary">{toast.title}</p>
         {toast.message && (
-          <p className="text-xs text-text-secondary mt-1">{toast.message}</p>
+          <p className="text-xs text-text-secondary mt-1 break-words">{toast.message}</p>
         )}
       </div>
       <button
@@ -66,26 +59,14 @@ const ToastItem: React.FC<ToastProps> = ({ toast, onClose }) => {
 };
 
 export const ToastContainer: React.FC = () => {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [toasts, setToasts] = useState<ToastData[]>([]);
 
-  const addToast = (toast: Omit<Toast, 'id'>) => {
-    const id = String(Date.now());
-    setToasts(prev => [...prev, { ...toast, id }]);
-  };
-
-  const removeToast = (id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  };
-
-  // Expose addToast to window for global access
-  useEffect(() => {
-    (window as any).addToast = addToast;
-  }, []);
+  useEffect(() => subscribeToasts(setToasts), []);
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
-      {toasts.map(toast => (
-        <ToastItem key={toast.id} toast={toast} onClose={removeToast} />
+    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
+      {toasts.map((toast) => (
+        <ToastItem key={toast.id} toast={toast} onClose={dismissToast} />
       ))}
     </div>
   );

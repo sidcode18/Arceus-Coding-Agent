@@ -10,8 +10,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
+!frontend/src/lib/
 parts/
 sdist/
 var/
@@ -100,3 +101,4 @@ infrastructure/docker/volumes/
 infrastructure/prometheus/data/
 infrastructure/grafana/data/
 .aider*
+backend/storage/

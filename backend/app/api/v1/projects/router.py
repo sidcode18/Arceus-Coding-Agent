@@ -4,11 +4,13 @@ from typing import List
 
 from app.db.session import get_async_session
 from app.api.v1.projects.schemas import (
-    ProjectCreate, ProjectResponse, FileWriteRequest, FileResponse, SearchQuery, SearchResult
+    ProjectCreate, ProjectResponse, FileWriteRequest, FileResponse, SearchQuery, SearchResult,
+    TerminalCommandRequest,
 )
 from app.repositories.project_repository import ProjectRepository
 from app.services.repository import repository_manager
 from app.services.search_service import get_search_service
+from app.tools.terminal_tools import TerminalTool
 from app.models.project import Project
 
 router = APIRouter()
@@ -160,3 +162,24 @@ async def search_project(
     search_svc = get_search_service()
     results = await search_svc.semantic_search(query.query, project_id=project_id, limit=query.limit)
     return results
+
+@router.post("/{project_id}/terminal")
+async def run_terminal_command(
+    project_id: str,
+    request: TerminalCommandRequest,
+    db: AsyncSession = Depends(get_async_session)
+):
+    """Run a shell command inside the project's cloned workspace.
+
+    Reuses the agent's TerminalTool so commands execute in the same isolated
+    workspace with the same safety policy.
+    """
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    result = await TerminalTool().execute(command=request.command, project_id=project_id)
+    if isinstance(result, dict) and result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
