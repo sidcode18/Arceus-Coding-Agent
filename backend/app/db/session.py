@@ -6,9 +6,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.db.base import Base
 
+
+def _to_async_url(url: str) -> str:
+    """Ensure the database URL uses an async driver.
+
+    The async engine requires an async driver (asyncpg). Environments that
+    provide a plain ``postgresql://`` (or psycopg2) URL are normalized so the
+    engine can be created without a sync-driver error.
+    """
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql+psycopg2://"):
+        return "postgresql+asyncpg://" + url[len("postgresql+psycopg2://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    return url
+
+
 # Create async engine
 engine = create_async_engine(
-    settings.database_url,
+    _to_async_url(settings.database_url),
     pool_size=settings.database_pool_size,
     max_overflow=settings.database_max_overflow,
     echo=settings.debug,

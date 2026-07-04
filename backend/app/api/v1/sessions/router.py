@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +27,7 @@ class SessionResponse(BaseModel):
     title: Optional[str] = None
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageCreate(BaseModel):
