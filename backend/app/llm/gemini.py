@@ -1,11 +1,14 @@
 import structlog
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Type, TypeVar
 
 from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.llm.base import LLMProvider
+
+T = TypeVar("T", bound=BaseModel)
 
 logger = structlog.get_logger()
 
@@ -55,6 +58,26 @@ class GeminiProvider(LLMProvider):
         logger.info("Generating with Gemini", model=self.model_name)
         response = await model.ainvoke(messages)
         return response
+
+    async def generate_structured(
+        self,
+        messages: List[BaseMessage],
+        schema: Type[T],
+    ) -> T:
+        """Generate a response and parse it into *schema* via with_structured_output.
+
+        langchain-google-genai supports ``with_structured_output`` with Pydantic
+        models, which instructs Gemini to return JSON conforming to the schema.
+        The result is automatically parsed and validated — no keyword scanning.
+        """
+        structured_model = self.llm.with_structured_output(schema)
+        logger.info(
+            "Generating structured output with Gemini",
+            model=self.model_name,
+            schema=schema.__name__,
+        )
+        result = await structured_model.ainvoke(messages)
+        return result
 
     async def generate_stream(
         self,

@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Type, TypeVar
 
 from langchain_core.messages import BaseMessage
+from pydantic import BaseModel
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class LLMProvider(ABC):
@@ -30,3 +33,18 @@ class LLMProvider(ABC):
     ) -> AsyncGenerator[str, None]:
         """Stream a response from the LLM"""
         pass
+
+    async def generate_structured(
+        self,
+        messages: List[BaseMessage],
+        schema: Type[T],
+    ) -> T:
+        """Generate a structured response validated against a Pydantic schema.
+
+        Providers that support native structured output should override this
+        method.  The default implementation raises NotImplementedError so that
+        callers can fall back gracefully.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement generate_structured"
+        )

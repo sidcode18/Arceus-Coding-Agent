@@ -1,5 +1,6 @@
 import structlog
-from typing import Dict, Any
+from typing import Dict, Any, Literal
+from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
@@ -8,42 +9,79 @@ from app.core.config import settings
 
 logger = structlog.get_logger()
 
+# ---------------------------------------------------------------------------
+# Structured output schema
+# ---------------------------------------------------------------------------
+
+ReviewDecision = Literal["approved", "changes_requested", "neutral"]
+
+
+class ReviewOutput(BaseModel):
+    """Structured output for the ReviewerAgent.
+
+    Using a Pydantic schema forces the LLM to emit valid JSON that is
+    automatically parsed — no substring scanning of free-text output.
+    """
+
+    decision: ReviewDecision = Field(
+        description=(
+            "Overall verdict: 'approved' if the changes are correct and complete, "
+            "'changes_requested' if there are bugs or quality issues that must be "
+            "fixed before merging, 'neutral' if the changes are trivial or "
+            "insufficient to judge."
+        )
+    )
+    summary: str = Field(
+        description="One-sentence summary of the review outcome."
+    )
+    issues: list[str] = Field(
+        default_factory=list,
+        description="List of specific issues found (empty if approved).",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Optional improvement suggestions (style, performance, etc.).",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
+
 
 class ReviewerAgent(BaseAgent):
-    """Agent for reviewing code changes and providing feedback"""
-    
+    """Agent for reviewing code changes and providing feedback."""
+
     def __init__(self):
         super().__init__("reviewer")
         self.llm = LLMFactory.get_provider("gemini", model_name=settings.gemini_model)
-    
+
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Review the code changes made by the Coder agent"""
+        """Review the code changes made by the Coder agent."""
         logger.info("ReviewerAgent reviewing code changes")
-        
+
         code_changes = state.get("code_changes", [])
-        
+
         if not code_changes:
             logger.warning("No code changes to review")
-            no_changes_message = AIMessage(content="No code changes to review.")
-            return {"messages": [no_changes_message], "review_status": "skipped"}
-        
-        # Build review prompt
-        system_prompt = """You are a code reviewer. Your task is to review the provided code changes and provide constructive feedback.
-Focus on:
-1. Code quality and best practices
-2. Potential bugs or issues
-3. Security concerns
-4. Performance considerations
-5. Code readability and maintainability
+            return {
+                "messages": [AIMessage(content="No code changes to review.")],
+                "review_status": "skipped",
+                "review_content": "",
+            }
 
-Provide your review in the following format:
-- Overall assessment (approve/request changes)
-- Specific issues found (if any)
-- Suggestions for improvement
-"""
-        
-        # Format code changes for review using the consistent schema emitted
-        # by the CoderAgent ({tool, file_path, content, command, result}).
+        system_prompt = (
+            "You are a code reviewer. Review the provided code changes and return a "
+            "structured verdict.\n\n"
+            "Focus on:\n"
+            "1. Correctness — does the code do what was asked?\n"
+            "2. Code quality and best practices\n"
+            "3. Potential bugs or security issues\n"
+            "4. Consistency with the existing codebase style\n\n"
+            "Return your verdict using the structured format provided."
+        )
+
+        # Format the changeset for review
         change_blocks = []
         for change in code_changes:
             tool = change.get("tool", "unknown")
@@ -61,39 +99,46 @@ Provide your review in the following format:
                     f"File: {change.get('file_path') or 'unknown'}\n"
                     f"New content:\n{change.get('content', '')}"
                 )
-        code_diff = "\n\n".join(change_blocks)
-        
+        code_diff = "\n\n---\n\n".join(change_blocks)
+
         review_messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Please review the following code changes:\n\n{code_diff}")
+            HumanMessage(content=f"Please review the following code changes:\n\n{code_diff}"),
         ]
-        
+
         try:
-            # Generate review
-            review_response = await self.llm.generate(review_messages)
-            
-            logger.info("ReviewerAgent completed review")
-            
-            # Parse review to determine approval status
-            review_content = review_response.content.lower()
-            if "approve" in review_content or "looks good" in review_content:
-                review_status = "approved"
-            elif "request changes" in review_content or "needs work" in review_content:
-                review_status = "changes_requested"
-            else:
-                review_status = "neutral"
-            
+            # Use structured output — the LLM is forced to return a ReviewOutput
+            # JSON object; no keyword scanning needed.
+            review_output: ReviewOutput = await self.llm.generate_structured(
+                review_messages, schema=ReviewOutput
+            )
+
+            logger.info(
+                "ReviewerAgent completed review",
+                decision=review_output.decision,
+                issues=len(review_output.issues),
+            )
+
+            # Build a human-readable message from the structured output
+            parts = [f"**Decision:** {review_output.decision}", f"{review_output.summary}"]
+            if review_output.issues:
+                parts.append("**Issues:**\n" + "\n".join(f"- {i}" for i in review_output.issues))
+            if review_output.suggestions:
+                parts.append(
+                    "**Suggestions:**\n" + "\n".join(f"- {s}" for s in review_output.suggestions)
+                )
+            review_text = "\n\n".join(parts)
+
             return {
-                "messages": [review_response],
-                "review_status": review_status,
-                "review_content": review_response.content
+                "messages": [AIMessage(content=review_text)],
+                "review_status": review_output.decision,
+                "review_content": review_text,
             }
-            
+
         except Exception as e:
             logger.error("ReviewerAgent failed to review", error=str(e))
-            error_message = AIMessage(content=f"Review failed: {str(e)}")
             return {
-                "messages": [error_message],
+                "messages": [AIMessage(content=f"Review failed: {str(e)}")],
                 "review_status": "error",
-                "review_content": str(e)
+                "review_content": str(e),
             }
