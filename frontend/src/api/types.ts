@@ -62,11 +62,22 @@ export interface NodeState {
   review_status: string;
   reflection_action: string;
   errors: string[];
+  /** Live safeguard counters forwarded from the backend on every node_update */
+  iteration_count: number;
+  retry_count: number;
+}
+
+export interface WorkflowMetrics {
+  iteration_count: number;
+  retry_count: number;
+  execution_time: number;
+  termination_reason: string;
 }
 
 export type AgentEvent =
   | { event: 'workflow_started'; session_id: string }
   | { event: 'node_update'; node: string; state: NodeState }
   | { event: 'message_update'; node: string; content: string; type: string }
-  | { event: 'workflow_completed'; session_id: string }
+  | { event: 'workflow_completed'; session_id: string; metrics: WorkflowMetrics }
+  | { event: 'workflow_terminated'; session_id: string; reason: string; detail: string; metrics: WorkflowMetrics }
   | { event: 'error'; message: string };

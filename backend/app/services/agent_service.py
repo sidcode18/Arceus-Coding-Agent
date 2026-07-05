@@ -1,28 +1,12 @@
+import time
 import structlog
 from typing import Any, Dict, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from app.agents.workflows.coding_workflow import create_coding_workflow
+from app.agents.workflows.coding_workflow import create_coding_workflow, build_initial_state
 
 logger = structlog.get_logger()
-
-
-def _build_initial_state(message: str, project_id: Optional[str]) -> Dict[str, Any]:
-    return {
-        "messages": [HumanMessage(content=message)],
-        "plan": "",
-        "plan_steps": [],
-        "retrieved_context": [],
-        "code_changes": [],
-        "review_status": "",
-        "review_content": "",
-        "reflection_action": "",
-        "reflection_content": "",
-        "status": "starting",
-        "errors": [],
-        "project_id": project_id or "",
-    }
 
 
 class AgentService:
@@ -48,8 +32,10 @@ class AgentService:
             project_id=project_id,
         )
 
-        initial_state = _build_initial_state(task_prompt, project_id)
+        initial_state = build_initial_state(task_prompt, project_id or "")
+        wall_start = time.monotonic()
         final_state = await self._get_workflow().ainvoke(initial_state)
+        elapsed = time.monotonic() - wall_start
 
         return {
             "status": "success",
@@ -62,6 +48,13 @@ class AgentService:
             "reflection_action": final_state.get("reflection_action", ""),
             "result": self._final_message(final_state.get("messages", [])),
             "errors": final_state.get("errors", []),
+            # execution metrics
+            "metrics": {
+                "iteration_count": final_state.get("iteration_count", 0),
+                "retry_count": final_state.get("retry_count", 0),
+                "execution_time": round(elapsed, 3),
+                "termination_reason": final_state.get("termination_reason", ""),
+            },
         }
 
     @staticmethod

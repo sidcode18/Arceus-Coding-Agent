@@ -135,7 +135,22 @@ export function useAgentSocket(sessionId: string): UseAgentSocketResult {
           setTimeline((prev) =>
             prev.map((e) => (e.status === 'running' ? { ...e, status: 'completed' as const } : e)),
           );
-          pushMessage({ kind: 'system', content: 'Workflow completed successfully.' });
+          const m = evt.metrics;
+          const summary = m
+            ? `Workflow completed — ${m.iteration_count} iteration(s), ${m.retry_count} retry(s), ${m.execution_time}s.`
+            : 'Workflow completed successfully.';
+          pushMessage({ kind: 'system', content: summary });
+          break;
+        }
+        case 'workflow_terminated': {
+          setRunning(false);
+          setTimeline((prev) =>
+            prev.map((e) => (e.status === 'running' ? { ...e, status: 'error' as const } : e)),
+          );
+          pushMessage({
+            kind: 'error',
+            content: `Workflow stopped (${evt.reason}): ${evt.detail}`,
+          });
           break;
         }
         case 'error': {

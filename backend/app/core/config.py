@@ -107,7 +107,27 @@ class Settings(BaseSettings):
     tool_execution_timeout: int = 30
     tool_max_memory: int = Field(default=536870912)  # 512MB
     tool_max_cpu_time: int = 30
-    
+
+    # Workflow execution limits
+    workflow_max_iterations: int = Field(
+        default=5,
+        description="Maximum number of full retriever→reflection cycles before aborting.",
+    )
+    workflow_max_retries: int = Field(
+        default=3,
+        description="Maximum number of coder→reviewer→coder retry loops before forcing reflection.",
+    )
+    workflow_timeout_seconds: float = Field(
+        default=300.0,
+        description="Hard wall-clock timeout (seconds) for a single workflow run.",
+    )
+
+    # Retrieval quality gate
+    retrieval_min_score: float = Field(
+        default=0.30,
+        description="Minimum Qdrant cosine similarity score to include in retrieved context.",
+    )
+
     # Rate Limiting
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 100
