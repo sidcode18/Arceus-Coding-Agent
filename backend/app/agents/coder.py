@@ -3,8 +3,6 @@ from typing import Dict, Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
-from app.llm.factory import LLMFactory
-from app.core.config import settings
 from app.tools.registry import ToolRegistry
 from app.agents.planner import _format_retrieved_context
 
@@ -16,7 +14,7 @@ class CoderAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("coder")
-        self.llm = LLMFactory.get_provider("gemini", model_name=settings.gemini_model)
+        self._init_llm()
         self.tool_registry = ToolRegistry()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:

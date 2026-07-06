@@ -13,9 +13,18 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 
-# Compile the workflow once at module import time so every connection reuses
-# the same compiled graph object rather than rebuilding it per message.
-_workflow = create_coding_workflow()
+# Workflow compiled lazily on first request so that importing this module
+# (which happens at app startup, and during test collection) never triggers
+# agent/LLM construction — and therefore never requires GOOGLE_API_KEY at
+# import time.
+_workflow = None
+
+
+def _get_workflow():
+    global _workflow
+    if _workflow is None:
+        _workflow = create_coding_workflow()
+    return _workflow
 
 
 def _build_metrics(final_state: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
@@ -62,7 +71,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 async def _run_stream() -> Dict[str, Any]:
                     """Drive the astream loop and return the last observed state."""
                     last: Dict[str, Any] = {}
-                    async for event in _workflow.astream(initial_state):
+                    async for event in _get_workflow().astream(initial_state):
                         for node_name, node_state in event.items():
                             if not isinstance(node_state, dict):
                                 continue

@@ -1,6 +1,6 @@
 """Application configuration"""
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +21,24 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     log_level: str = "INFO"
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _coerce_debug(cls, v: Any) -> bool:
+        """Accept any truthy/falsy value for DEBUG.
+
+        The ``DEBUG`` environment variable is commonly set by other tools (e.g.
+        Node, IDEs) to non-boolean strings like ``"release"`` or ``"0"``.
+        Pydantic's default ``bool`` coercion rejects those and raises a
+        ``ValidationError`` at import time.  This validator normalises any
+        string to a proper bool so that importing the backend never fails
+        purely because of an unrelated ``DEBUG`` value in the shell environment.
+        """
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() not in {"0", "false", "no", "off", "release", ""}
+        return bool(v)
     
     # Frontend
     frontend_url: str = "http://localhost:3000"

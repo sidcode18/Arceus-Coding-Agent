@@ -3,7 +3,6 @@ from typing import Dict, Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.base import BaseAgent
-from app.llm.factory import LLMFactory
 from app.core.config import settings
 from app.services.search_service import get_search_service
 
@@ -15,8 +14,21 @@ class RetrievalAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("retriever")
-        self.llm = LLMFactory.get_provider("gemini", model_name=settings.gemini_model)
-        self.search_service = get_search_service()
+        self._init_llm()
+        # search_service also deferred: get_search_service() connects to Qdrant
+        # at construction time.  We call it lazily on first ainvoke instead.
+        self._search_service = None
+
+    @property
+    def search_service(self):
+        if self._search_service is None:
+            self._search_service = get_search_service()
+        return self._search_service
+
+    @search_service.setter
+    def search_service(self, value) -> None:
+        """Allow tests (and custom wiring) to inject a mock search service."""
+        self._search_service = value
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Retrieve relevant code context based on the current task."""

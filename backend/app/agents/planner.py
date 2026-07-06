@@ -3,8 +3,6 @@ from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from app.agents.base import BaseAgent
-from app.llm.factory import LLMFactory
-from app.core.config import settings
 
 logger = structlog.get_logger()
 
@@ -39,7 +37,7 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("planner")
-        self.llm = LLMFactory.get_provider("gemini", model_name=settings.gemini_model)
+        self._init_llm()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a plan for the given task"""

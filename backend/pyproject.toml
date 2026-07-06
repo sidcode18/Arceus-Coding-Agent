@@ -79,3 +79,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: marks tests that call real external services (Gemini, Qdrant, Postgres). Skipped in CI unless the corresponding env vars are set.",
+]

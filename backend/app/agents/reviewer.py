@@ -4,8 +4,6 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
-from app.llm.factory import LLMFactory
-from app.core.config import settings
 
 logger = structlog.get_logger()
 
@@ -54,7 +52,7 @@ class ReviewerAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("reviewer")
-        self.llm = LLMFactory.get_provider("gemini", model_name=settings.gemini_model)
+        self._init_llm()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Review the code changes made by the Coder agent."""

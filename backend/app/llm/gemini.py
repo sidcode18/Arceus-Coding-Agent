@@ -2,7 +2,6 @@ import structlog
 from typing import Any, AsyncGenerator, Dict, List, Optional, Type, TypeVar
 
 from langchain_core.messages import BaseMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -26,15 +25,31 @@ def _to_gemini_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class GeminiProvider(LLMProvider):
-    """Google Gemini Provider implementation"""
+    """Google Gemini Provider implementation.
+
+    The underlying ``ChatGoogleGenerativeAI`` client is constructed lazily on
+    first use so that importing this module — and constructing a GeminiProvider
+    instance — never requires ``GOOGLE_API_KEY`` to be present.  The key is only
+    validated when a real LLM call is made.
+    """
 
     def __init__(self, model_name: str = "gemini-1.5-pro-latest"):
         self.model_name = model_name
-        self.llm = ChatGoogleGenerativeAI(
-            model=model_name,
-            google_api_key=settings.gemini_api_key,
-            convert_system_message_to_human=True
-        )
+        # Deliberately NOT constructing ChatGoogleGenerativeAI here.
+        # Use the _llm property instead.
+        self._llm_instance: Optional[Any] = None
+
+    @property
+    def _llm(self):
+        """Return (and lazily create) the underlying LangChain Gemini client."""
+        if self._llm_instance is None:
+            from langchain_google_genai import ChatGoogleGenerativeAI  # deferred import
+            self._llm_instance = ChatGoogleGenerativeAI(
+                model=self.model_name,
+                google_api_key=settings.gemini_api_key,
+                convert_system_message_to_human=True,
+            )
+        return self._llm_instance
 
     async def generate(
         self,
@@ -44,17 +59,10 @@ class GeminiProvider(LLMProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
     ) -> BaseMessage:
-        
-        # Combine system prompt if provided
-        # Langchain ChatGoogleGenerativeAI handles system messages
-        
-        model = self.llm
+        model = self._llm
         if tools:
-            # langchain-google-genai expects flat function declarations, not the
-            # OpenAI ``{"type": "function", "function": {...}}`` envelope; passing
-            # the wrapped form yields empty function names and a 400 from Gemini.
             model = model.bind_tools([_to_gemini_tool(tool) for tool in tools])
-            
+
         logger.info("Generating with Gemini", model=self.model_name)
         response = await model.ainvoke(messages)
         return response
@@ -64,13 +72,8 @@ class GeminiProvider(LLMProvider):
         messages: List[BaseMessage],
         schema: Type[T],
     ) -> T:
-        """Generate a response and parse it into *schema* via with_structured_output.
-
-        langchain-google-genai supports ``with_structured_output`` with Pydantic
-        models, which instructs Gemini to return JSON conforming to the schema.
-        The result is automatically parsed and validated — no keyword scanning.
-        """
-        structured_model = self.llm.with_structured_output(schema)
+        """Generate a response and parse it into *schema* via with_structured_output."""
+        structured_model = self._llm.with_structured_output(schema)
         logger.info(
             "Generating structured output with Gemini",
             model=self.model_name,
@@ -87,9 +90,8 @@ class GeminiProvider(LLMProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
-        
-        model = self.llm
-        
+        model = self._llm
+
         logger.info("Streaming with Gemini", model=self.model_name)
         async for chunk in model.astream(messages):
             if isinstance(chunk.content, str):
