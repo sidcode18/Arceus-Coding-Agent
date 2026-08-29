@@ -40,7 +40,19 @@ class RepositoryManager:
             
         return full_path
         
-    def clone_repository(self, project_id: str, repo_url: str, branch: Optional[str] = None) -> bool:
+    def _rewrite_github_url(self, repo_url: str, token: str) -> str:
+        """Inject x-access-token into GitHub HTTPS URLs for private access."""
+        if "github.com" in repo_url and token:
+            # Handle standard https://github.com/owner/repo.git
+            if repo_url.startswith("https://github.com/"):
+                return repo_url.replace("https://github.com/", f"https://x-access-token:{token}@github.com/")
+            # Handle if already has auth (unlikely but safe to check)
+            if "@github.com" not in repo_url and "://" in repo_url:
+                parts = repo_url.split("://")
+                return f"{parts[0]}://x-access-token:{token}@{parts[1]}"
+        return repo_url
+
+    def clone_repository(self, project_id: str, repo_url: str, branch: Optional[str] = None, github_token: Optional[str] = None) -> bool:
         """Clone a repository into the workspace"""
         repo_path = self.get_repo_path(project_id)
         self._ensure_inside_workspace(repo_path)
@@ -48,12 +60,20 @@ class RepositoryManager:
         # Ensure workspace directory exists
         os.makedirs(self.workspace_dir, exist_ok=True)
         
+        auth_repo_url = self._rewrite_github_url(repo_url, github_token) if github_token else repo_url
+        
         logger.info("Cloning repository", repo_url=repo_url, path=repo_path)
         
         if os.path.exists(repo_path):
             logger.info("Repository already exists, pulling latest changes")
             try:
                 repo = Repo(repo_path)
+                
+                # If we have a new token, update the remote URL to ensure pulls work
+                if github_token:
+                    origin = repo.remotes.origin
+                    origin.set_url(auth_repo_url)
+                    
                 origin = repo.remotes.origin
                 origin.pull()
                 if branch:
@@ -64,7 +84,7 @@ class RepositoryManager:
                 return False
                 
         try:
-            repo = Repo.clone_from(repo_url, repo_path)
+            repo = Repo.clone_from(auth_repo_url, repo_path)
             if branch:
                 repo.git.checkout(branch)
             return True

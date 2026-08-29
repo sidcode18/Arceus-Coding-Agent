@@ -21,6 +21,21 @@ class SessionRepository(BaseRepository[Session_, BaseModel, SessionUpdate]):
         result = await self.session.execute(statement)
         return list(result.scalars().all())
 
+    async def get_by_id(self, id: str, user_id: str | None = None) -> Session_ | None:
+        statement = select(self.model).where(self.model.id == id)
+        if user_id:
+            statement = statement.where(self.model.user_id == user_id)
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def delete(self, id: str, user_id: str | None = None) -> bool:
+        db_obj = await self.get_by_id(id, user_id=user_id)
+        if db_obj:
+            await self.session.delete(db_obj)
+            await self.session.flush()
+            return True
+        return False
+
     async def add_message(self, session_id: str, role: str, content: str, metadata: dict | None = None) -> Message:
         message = Message(
             session_id=session_id,

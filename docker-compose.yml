@@ -175,6 +175,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
       - OTEL_SERVICE_NAME=ai-coding-agent-backend
+      - REPOSITORY_CLONE_PATH=/repositories
     volumes:
       - repositories_data:/repositories
     depends_on:
@@ -213,6 +214,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - REPOSITORY_CLONE_PATH=/repositories
     volumes:
       - repositories_data:/repositories
     depends_on:

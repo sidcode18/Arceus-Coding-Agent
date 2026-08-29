@@ -1,8 +1,5 @@
 # AI Coding Agent 
 
-[![CI Pipeline](https://github.com/your-username/ai-coding-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/ai-coding-agent/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 An enterprise-grade, autonomous AI coding assistant built on **FastAPI**, **LangGraph**, **React**, and **Qdrant**. This project provides a complete infrastructure to run LLM-powered coding agents capable of cloning repositories, analyzing code with AST parsing, performing semantic code search, and writing complex features autonomously.
 
 ## Key Features

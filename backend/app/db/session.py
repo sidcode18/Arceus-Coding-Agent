@@ -25,12 +25,22 @@ def _to_async_url(url: str) -> str:
     return url
 
 
+import sys
+from sqlalchemy import pool
+
+engine_kwargs = {
+    "echo": settings.debug,
+}
+if "pytest" in sys.modules:
+    engine_kwargs["poolclass"] = pool.NullPool
+else:
+    engine_kwargs["pool_size"] = settings.database_pool_size
+    engine_kwargs["max_overflow"] = settings.database_max_overflow
+
 # Create async engine
 engine = create_async_engine(
     _to_async_url(settings.database_url),
-    pool_size=settings.database_pool_size,
-    max_overflow=settings.database_max_overflow,
-    echo=settings.debug,
+    **engine_kwargs
 )
 
 # Create async session factory

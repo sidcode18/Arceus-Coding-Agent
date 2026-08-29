@@ -4,7 +4,9 @@ import json
 import structlog
 from typing import Dict, Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.session import get_async_session
 
 from app.agents.workflows.coding_workflow import create_coding_workflow, build_initial_state
 from app.core.config import settings
@@ -38,26 +40,89 @@ def _build_metrics(final_state: Dict[str, Any], elapsed: float) -> Dict[str, Any
 
 
 @router.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
+async def websocket_endpoint(
+    websocket: WebSocket, 
+    session_id: str, 
+    token: str = None,
+    db: AsyncSession = Depends(get_async_session)
+):
     """WebSocket endpoint for real-time agent execution streaming."""
+    from app.core.security import decode_token
+    from fastapi import status
+    from app.core.exceptions import AuthenticationError
+    
+    if not token:
+        logger.warning("WebSocket rejected: Missing token", session_id=session_id)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing token")
+        return
+        
+    try:
+        payload = decode_token(token)
+        user_id = payload.get("sub")
+        if not user_id:
+            raise AuthenticationError("Invalid token")
+    except AuthenticationError as e:
+        logger.warning("WebSocket rejected: Invalid token", session_id=session_id, error=str(e))
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        return
+
+    # Verify project ownership (frontend passes projectId as session_id)
+    from app.repositories.project_repository import ProjectRepository
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(session_id, user_id=user_id)
+    if not project:
+        logger.warning("WebSocket rejected: Project not found or unauthorized", session_id=session_id, user_id=user_id)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Project not found or unauthorized")
+        return
+
     await websocket.accept()
     logger.info("WebSocket connected", session_id=session_id)
 
+    # Queue for decoupling websocket reads, completely preventing concurrent recv()
+    message_queue = asyncio.Queue()
+
+    async def _ws_reader():
+        """Single dedicated task to read from websocket and put to queue."""
+        try:
+            while True:
+                data = await websocket.receive_text()
+                await message_queue.put(data)
+        except WebSocketDisconnect:
+            await message_queue.put(None)
+        except Exception as e:
+            logger.error("WebSocket reader error", error=str(e))
+            await message_queue.put(None)
+
+    # Start the single reader task for the lifetime of this connection
+    reader_task = asyncio.create_task(_ws_reader())
+
     try:
         while True:
-            data = await websocket.receive_text()
+            # Wait for next prompt
+            data = await message_queue.get()
+            if data is None:
+                break  # Connection closed
+                
             logger.info("Received message", session_id=session_id)
 
             try:
                 payload = json.loads(data)
                 message = payload.get("message", "")
                 project_id = payload.get("project_id", "")
+                llm_provider = payload.get("llm_provider", "")
+                llm_model = payload.get("llm_model", "")
 
                 await websocket.send_json(
                     {"event": "workflow_started", "session_id": session_id}
                 )
 
-                initial_state = build_initial_state(message, project_id)
+                initial_state = build_initial_state(
+                    message=message, 
+                    project_id=project_id, 
+                    user_id=user_id,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model
+                )
                 wall_start = time.monotonic()
 
                 # ----------------------------------------------------------
@@ -126,11 +191,68 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                                 )
                     return last
 
+                stream_task = asyncio.create_task(_run_stream())
+                
+                async def _listen_for_cancel():
+                    """Listen for incoming cancel messages while the workflow runs."""
+                    while True:
+                        msg_data = await message_queue.get()
+                        if msg_data is None:
+                            return False  # Disconnected
+                        try:
+                            msg_payload = json.loads(msg_data)
+                            if msg_payload.get("type") == "cancel":
+                                return True
+                        except Exception:
+                            pass  # Ignore invalid JSON during execution, keep listening
+                            
+                listen_task = asyncio.create_task(_listen_for_cancel())
+                
                 try:
-                    final_state = await asyncio.wait_for(
-                        _run_stream(),
-                        timeout=settings.workflow_timeout_seconds,
+                    done, pending = await asyncio.wait(
+                        [stream_task, listen_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=settings.workflow_timeout_seconds
                     )
+                    
+                    if stream_task in done:
+                        # Workflow finished naturally or raised an exception
+                        listen_task.cancel()
+                        try:
+                            await listen_task
+                        except asyncio.CancelledError:
+                            pass
+                        final_state = stream_task.result()
+                    elif listen_task in done:
+                        # Received cancel message or connection closed
+                        stream_task.cancel()
+                        try:
+                            await stream_task
+                        except asyncio.CancelledError:
+                            pass
+                        was_cancelled = listen_task.result()
+                        if was_cancelled:
+                            logger.info("Workflow cancelled by user", session_id=session_id)
+                            await websocket.send_json({
+                                "event": "workflow_terminated",
+                                "session_id": session_id,
+                                "reason": "cancelled",
+                                "detail": "Execution stopped by user."
+                            })
+                            continue  # Wait for next prompt
+                        else:
+                            logger.warning("Connection lost during execution", session_id=session_id)
+                            break  # Exit main loop
+                    else:
+                        # Timeout occurred
+                        stream_task.cancel()
+                        listen_task.cancel()
+                        try:
+                            await asyncio.gather(stream_task, listen_task, return_exceptions=True)
+                        except Exception:
+                            pass
+                        raise asyncio.TimeoutError()
+                        
                 except asyncio.TimeoutError:
                     timed_out = True
                     elapsed = time.monotonic() - wall_start
@@ -191,8 +313,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 logger.error("Error processing websocket message", error=str(e))
                 await websocket.send_json({"event": "error", "message": str(e)})
 
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected", session_id=session_id)
     except Exception as e:
         logger.error("WebSocket error", error=str(e))
         try:
@@ -200,4 +320,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 {"event": "error", "message": f"WebSocket error: {str(e)}"}
             )
         except Exception:
+            pass
+    finally:
+        reader_task.cancel()
+        try:
+            await reader_task
+        except asyncio.CancelledError:
             pass

@@ -31,10 +31,11 @@ export default {
           hover: '#60a5fa',
           active: '#2563eb',
         },
-        success: '#10b981',
-        warning: '#f59e0b',
-        error: '#ef4444',
-        info: '#06b6d4',
+        success: '#10B981', // green
+        warning: '#F59E0B', // amber
+        error: '#EF4444',   // red
+        info: '#3B82F6',    // blue
+
         // Git colors
         git: {
           added: '#10b981',

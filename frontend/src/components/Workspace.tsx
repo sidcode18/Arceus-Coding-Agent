@@ -1,52 +1,60 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import {
-  ArrowLeft,
-  GitBranch,
-  Sparkles,
-  Settings as SettingsIcon,
   Search,
-  Bot,
-  Terminal as TerminalIcon,
   GitCompare,
-  Save,
   PanelLeft,
-  FileCode,
-  AlertCircle,
+  Files,
+  Settings as SettingsIcon,
+  Columns,
+  Command,
+  LayoutDashboard,
+  GitBranch
 } from 'lucide-react';
 import { FileTree } from './sidebar/FileTree';
+import { SourceControl } from './sidebar/SourceControl';
 import { AgentChat } from './chat/AgentChat';
 import { EditorTabs } from './editor/EditorTabs';
-import { AgentTimeline } from './panels/AgentTimeline';
 import { Terminal } from './panels/Terminal';
 import { StatusBar } from './layout/StatusBar';
-import { ResizablePanel } from './layout/ResizablePanel';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, useDefaultLayout } from 'react-resizable-panels';
 import { ConnectionIndicators } from './layout/ConnectionIndicators';
 import { DiffViewer } from './editor/DiffViewer';
 import { SearchModal } from './SearchModal';
 import { SettingsModal } from './SettingsModal';
-import { ThemeToggle } from './ui/ThemeToggle';
 import { LoadingOverlay } from './ui/LoadingSpinner';
-import { EmptyState } from './ui/EmptyState';
+import { ErrorState } from './ui/ErrorState';
+import { IndexingProgress } from './IndexingProgress';
+import { ProblemsPanel } from './panels/ProblemsPanel';
+import { OutputPanel } from './panels/OutputPanel';
 import { useAgentSocket } from '../hooks/useAgentSocket';
 import { useTheme } from '../context/ThemeContext';
 import { api, extractError } from '../api/client';
 import type { CodeChange, Project } from '../api/types';
 import { languageFromName } from '../lib/language';
 import { toast } from '../lib/toast';
+import { useAuth } from '../context/AuthContext';
+import { useHotkeys } from '../hooks/useHotkeys';
 
 interface OpenTab {
   path: string;
   name: string;
   content: string;
   original: string;
+  isDiffView?: boolean;
 }
+
+import { DiffEditor } from '@monaco-editor/react';
 
 export const Workspace: React.FC = () => {
   const { projectId = '' } = useParams();
   const navigate = useNavigate();
   const { theme } = useTheme();
+  const { user } = useAuth();
+
+  const { defaultLayout: workspaceLayout, onLayoutChanged: onWorkspaceLayoutChanged } = useDefaultLayout({ id: "workspace-layout-v5" });
+  const { defaultLayout: editorLayout, onLayoutChanged: onEditorLayoutChanged } = useDefaultLayout({ id: "editor-layout-v3" });
 
   const [project, setProject] = useState<Project | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -54,69 +62,130 @@ export const Workspace: React.FC = () => {
 
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+  const [activePathSecondary, setActivePathSecondary] = useState<string | null>(null);
+  const [splitMode, setSplitMode] = useState(false);
+  const [activeEditorPane, setActiveEditorPane] = useState<'primary' | 'secondary'>('primary');
+
   const [treeToken, setTreeToken] = useState(0);
-  const [bottomPanel, setBottomPanel] = useState<'timeline' | 'terminal'>('timeline');
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  
+  type BottomPanel = 'terminal' | 'problems' | 'output' | 'none';
+  const [bottomPanel, setBottomPanel] = useState<BottomPanel>('terminal');
+  const [zenMode, setZenMode] = useState(false);
+  const [assistantVisible, setAssistantVisible] = useState(true);
+  
+  const [cursorPosition, setCursorPosition] = useState<{line: number; col: number} | undefined>(undefined);
+  const [cursorPositionSecondary, setCursorPositionSecondary] = useState<{line: number; col: number} | undefined>(undefined);
+  
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
+
+  const [activityView, setActivityView] = useState<'explorer' | 'search' | 'git'>('explorer');
 
   const socket = useAgentSocket(projectId);
   const preRunSnapshot = useRef<Record<string, string>>({});
   const prevRunning = useRef(false);
 
-  const activeTab = tabs.find((t) => t.path === activePath) || null;
+  const activeTabPrimary = tabs.find((t) => t.path === activePath) || null;
+  const activeTabSecondary = splitMode ? (tabs.find((t) => t.path === activePathSecondary) || null) : null;
 
-  // Load project metadata.
-  useEffect(() => {
+  const fetchProject = useCallback(() => {
     let active = true;
     setLoading(true);
-    api
-      .getProject(projectId)
+    api.getProject(projectId)
       .then((p) => active && (setProject(p), setLoadError(null)))
       .catch((err) => active && setLoadError(extractError(err)))
       .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [projectId]);
+
+  useEffect(() => {
+    const cleanup = fetchProject();
+    return cleanup;
+  }, [fetchProject]);
 
   const openFile = useCallback(
     async (path: string, name?: string) => {
       const existing = tabs.find((t) => t.path === path);
-      if (existing) {
-        setActivePath(path);
-        return;
+      if (!existing) {
+        try {
+          const file = await api.getFile(projectId, path);
+          setTabs((prev) => [
+            ...prev,
+            { path, name: name || path.split('/').pop() || path, content: file.content, original: file.content },
+          ]);
+          // Fire-and-forget prioritization to instantly index opened files
+          api.prioritizeFile(projectId, path).catch(console.error);
+        } catch (err) {
+          toast.error('Could not open file', extractError(err));
+          return;
+        }
       }
-      try {
-        const file = await api.getFile(projectId, path);
-        setTabs((prev) => [
-          ...prev,
-          { path, name: name || path.split('/').pop() || path, content: file.content, original: file.content },
-        ]);
+      if (activeEditorPane === 'secondary' && splitMode) {
+        setActivePathSecondary(path);
+      } else {
         setActivePath(path);
-      } catch (err) {
-        toast.error('Could not open file', extractError(err));
       }
     },
-    [projectId, tabs],
+    [projectId, tabs, activeEditorPane, splitMode]
   );
 
-  const closeTab = (path: string) => {
+  const openDiffTab = useCallback(
+    async (path: string) => {
+      const tabPath = `git-diff://${path}`;
+      const existing = tabs.find((t) => t.path === tabPath);
+      if (!existing) {
+        try {
+          const fileRes = await api.getFile(projectId, path).catch(() => ({ content: '' }));
+          const gitRes = await api.runCommand(projectId, `git show HEAD:"${path}"`);
+          const original = gitRes.exit_code === 0 ? (gitRes.stdout || '') : '';
+          
+          setTabs((prev) => [
+            ...prev,
+            { path: tabPath, name: (path.split('/').pop() || path) + ' (Working Tree)', content: fileRes.content, original, isDiffView: true },
+          ]);
+        } catch (err) {
+          toast.error('Could not open diff', extractError(err));
+          return;
+        }
+      }
+      if (activeEditorPane === 'secondary' && splitMode) {
+        setActivePathSecondary(tabPath);
+      } else {
+        setActivePath(tabPath);
+      }
+    },
+    [projectId, tabs, activeEditorPane, splitMode]
+  );
+
+  const closeTab = (path: string, pane: 'primary' | 'secondary' = 'primary') => {
+    if (pane === 'primary' && activePath === path) {
+      const nextTabs = tabs.filter(t => t.path !== path);
+      setActivePath(nextTabs.length ? nextTabs[nextTabs.length - 1].path : null);
+    }
+    if (pane === 'secondary' && activePathSecondary === path) {
+      const nextTabs = tabs.filter(t => t.path !== path);
+      setActivePathSecondary(nextTabs.length ? nextTabs[nextTabs.length - 1].path : null);
+    }
+    
     setTabs((prev) => {
-      const next = prev.filter((t) => t.path !== path);
-      if (activePath === path) setActivePath(next.length ? next[next.length - 1].path : null);
-      return next;
+      const isUsedElseWhere = (pane === 'primary' && activePathSecondary === path) || 
+                              (pane === 'secondary' && activePath === path);
+      if (isUsedElseWhere) return prev; 
+      return prev.filter((t) => t.path !== path);
     });
   };
 
-  const updateActiveContent = (content: string) => {
-    if (!activeTab) return;
-    setTabs((prev) => prev.map((t) => (t.path === activeTab.path ? { ...t, content } : t)));
+  const updateActiveContent = (content: string, pane: 'primary' | 'secondary') => {
+    const targetPath = pane === 'primary' ? activePath : activePathSecondary;
+    if (!targetPath) return;
+    setTabs((prev) => prev.map((t) => (t.path === targetPath ? { ...t, content } : t)));
   };
 
   const saveActive = useCallback(async () => {
-    const tab = tabs.find((t) => t.path === activePath);
+    const targetPath = activeEditorPane === 'primary' ? activePath : activePathSecondary;
+    const tab = tabs.find((t) => t.path === targetPath);
     if (!tab || tab.content === tab.original) return;
     try {
       await api.saveFile(projectId, tab.path, tab.content);
@@ -126,9 +195,8 @@ export const Workspace: React.FC = () => {
     } catch (err) {
       toast.error('Save failed', extractError(err));
     }
-  }, [tabs, activePath, projectId]);
+  }, [tabs, activePath, activePathSecondary, activeEditorPane, projectId]);
 
-  // Send to agent + snapshot open files so we can diff/revert afterwards.
   const handleSend = (message: string) => {
     const snap: Record<string, string> = {};
     for (const t of tabs) snap[t.path] = t.original;
@@ -138,7 +206,6 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  // When a run finishes with pending changes, surface the diff + refresh tree.
   useEffect(() => {
     if (prevRunning.current && !socket.running && socket.pendingChanges.length > 0) {
       setDiffOpen(true);
@@ -155,11 +222,9 @@ export const Workspace: React.FC = () => {
   const applyChange = async (change: CodeChange) => {
     try {
       await api.saveFile(projectId, change.file_path, change.content);
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.path === change.file_path ? { ...t, content: change.content, original: change.content } : t,
-        ),
-      );
+      setTabs((prev) => prev.map((t) =>
+        t.path === change.file_path ? { ...t, content: change.content, original: change.content } : t,
+      ));
       socket.dismissChange(change.file_path);
       setTreeToken((n) => n + 1);
       toast.success('Change applied', change.file_path);
@@ -174,11 +239,9 @@ export const Workspace: React.FC = () => {
       if (hadSnapshot) {
         const prevContent = preRunSnapshot.current[change.file_path];
         await api.saveFile(projectId, change.file_path, prevContent);
-        setTabs((prev) =>
-          prev.map((t) =>
-            t.path === change.file_path ? { ...t, content: prevContent, original: prevContent } : t,
-          ),
-        );
+        setTabs((prev) => prev.map((t) =>
+          t.path === change.file_path ? { ...t, content: prevContent, original: prevContent } : t,
+        ));
         toast.info('Change reverted', change.file_path);
       } else {
         toast.warning('Left agent version on disk', 'No prior version was open to revert to.');
@@ -190,24 +253,35 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  // Keyboard shortcuts.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        saveActive();
-      } else if (mod && e.key.toLowerCase() === 'b') {
-        e.preventDefault();
-        setSidebarVisible((v) => !v);
-      } else if (mod && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setSearchOpen(true);
+  // Keyboard Shortcuts via Hook
+  useHotkeys('cmd+s', saveActive);
+  useHotkeys('ctrl+s', saveActive);
+  useHotkeys('cmd+b', () => setSidebarVisible(v => !v));
+  useHotkeys('ctrl+b', () => setSidebarVisible(v => !v));
+  useHotkeys('cmd+k', () => setSearchOpen(true));
+  useHotkeys('ctrl+k', () => setSearchOpen(true));
+  useHotkeys('cmd+`', () => setBottomPanel(p => p === 'none' ? 'terminal' : 'none'));
+  useHotkeys('ctrl+`', () => setBottomPanel(p => p === 'none' ? 'terminal' : 'none'));
+  
+  // Zen Mode shortcut
+  const toggleZenMode = useCallback(() => {
+    setZenMode(z => {
+      if (!z) {
+        setSidebarVisible(false);
+        setBottomPanel('none');
+        setAssistantVisible(false);
+        return true;
+      } else {
+        setSidebarVisible(true);
+        setBottomPanel('terminal');
+        setAssistantVisible(true);
+        return false;
       }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [saveActive]);
+    });
+  }, []);
+  
+  useHotkeys('cmd+shift+z', toggleZenMode);
+  useHotkeys('ctrl+shift+z', toggleZenMode);
 
   const changedPaths = useMemo(() => {
     const s = new Set<string>();
@@ -216,7 +290,7 @@ export const Workspace: React.FC = () => {
     return s;
   }, [socket.pendingChanges, tabs]);
 
-  const editorTabs = tabs.map((t) => ({
+  const editorTabsPrimary = tabs.map((t) => ({
     id: t.path,
     name: t.name,
     language: languageFromName(t.name),
@@ -224,223 +298,383 @@ export const Workspace: React.FC = () => {
     isModified: t.content !== t.original,
     isActive: t.path === activePath,
   }));
+  
+  const editorTabsSecondary = splitMode ? tabs.map((t) => ({
+    id: t.path,
+    name: t.name,
+    language: languageFromName(t.name),
+    path: t.path.includes('/') ? t.path.slice(0, t.path.lastIndexOf('/')) : '',
+    isModified: t.content !== t.original,
+    isActive: t.path === activePathSecondary,
+  })) : [];
 
   if (loading) return <LoadingOverlay message="Opening workspace…" />;
-
   if (loadError || !project) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <EmptyState
-          icon={<AlertCircle size={36} className="text-error" />}
-          title="Workspace unavailable"
-          description={loadError || 'Project not found.'}
-          action={
-            <button onClick={() => navigate('/')} className="btn-secondary">
-              Back to dashboard
-            </button>
-          }
-        />
-      </div>
+      <ErrorState 
+        fullScreen 
+        title="Workspace unavailable"
+        message={loadError || 'Project not found.'}
+        onRetry={() => navigate('/')} 
+      />
     );
   }
 
+  if (project.index_status === 'pending' || project.index_status === 'indexing') {
+    return <IndexingProgress projectId={projectId} onComplete={fetchProject} />;
+  }
+
   return (
-    <div className="flex flex-col h-screen bg-background">
-      {/* Top bar */}
-      <div className="h-12 border-b border-border bg-background-elevated flex items-center justify-between px-3 gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={() => navigate('/')}
-            className="p-1.5 hover:bg-background-hover rounded-md transition-colors text-text-muted hover:text-text-primary"
-            title="Back to dashboard"
-          >
-            <ArrowLeft size={16} />
+    <div className="flex flex-col h-screen bg-background text-text-primary text-sm overflow-hidden">
+      {/* Premium Command Bar (Top Navigation) */}
+      <div className="h-11 border-b border-border bg-background flex items-center justify-between px-3 gap-4 shrink-0 z-10 select-none">
+        <div className="flex items-center gap-2">
+          <button onClick={() => navigate('/')} className="icon-btn hover:bg-bg-hover" title="Dashboard">
+            <LayoutDashboard size={18} />
           </button>
-          <div className="flex items-center gap-2 min-w-0">
-            <GitBranch size={16} className="text-primary shrink-0" />
-            <span className="text-sm font-medium text-text-primary truncate">{project.name}</span>
-            <span className="text-xs text-text-secondary bg-background px-2 py-0.5 rounded-md border border-border shrink-0">
-              {project.branch}
-            </span>
-          </div>
-          <div className="hidden md:flex items-center gap-1.5 text-text-muted">
-            <Sparkles size={14} className="text-warning" />
-            <span className="text-xs">Gemini 2.5 Flash</span>
-          </div>
+        </div>
+        
+        <div className="flex-1 flex justify-center">
+          <button 
+            onClick={() => setSearchOpen(true)}
+            className="flex items-center gap-3 bg-background-elevated/50 border border-border/80 hover:border-primary/50 hover:bg-background-elevated rounded-md px-4 py-1.5 text-xs text-text-muted hover:text-text-primary transition-all w-full max-w-xl group shadow-sm"
+          >
+            <Search size={14} className="group-hover:text-primary transition-colors" />
+            <div className="flex items-center gap-1.5 flex-1 min-w-0 justify-center">
+              <span className="font-semibold text-text-primary truncate tracking-tight">{project.name}</span>
+            </div>
+            <span className="opacity-50 text-[10px] font-semibold border border-border/50 rounded px-1.5 hidden md:block">⌘K</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-3">
-          <ConnectionIndicators wsStatus={socket.status} />
           {socket.pendingChanges.length > 0 && (
             <button
               onClick={() => setDiffOpen(true)}
-              className="flex items-center gap-1.5 text-xs bg-warning/15 text-warning border border-warning/30 rounded-md px-2 py-1 hover:bg-warning/25 transition-colors"
+              className="flex items-center gap-1.5 text-xs bg-primary/10 text-primary border border-primary/20 rounded py-1 px-2 hover:bg-primary/20 transition-colors font-medium shadow-sm animate-fade-in"
             >
-              <GitCompare size={13} /> {socket.pendingChanges.length} change
-              {socket.pendingChanges.length === 1 ? '' : 's'}
+              <GitCompare size={14} /> Review {socket.pendingChanges.length} Changes
             </button>
           )}
-          <button
-            onClick={() => setSearchOpen(true)}
-            className="p-2 hover:bg-background-hover rounded-md transition-colors text-text-muted hover:text-text-primary"
-            title="Search (Cmd/Ctrl+K)"
-          >
-            <Search size={16} />
-          </button>
-          <ThemeToggle />
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="p-2 hover:bg-background-hover rounded-md transition-colors text-text-muted hover:text-text-primary"
-            title="Settings"
-          >
-            <SettingsIcon size={16} />
-          </button>
+          <ConnectionIndicators />
+          {user && (
+            <div className="w-6 h-6 rounded bg-gradient-to-br from-primary to-primary-active flex items-center justify-center text-[10px] font-bold text-white shadow-sm ring-1 ring-border cursor-pointer hover:opacity-90">
+              {user.username.charAt(0).toUpperCase()}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Main */}
-      <div className="flex-1 flex overflow-hidden">
-        {sidebarVisible && (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={260}
-            minSize={180}
-            maxSize={420}
-            className="border-r border-border"
-          >
-            <FileTree
-              projectId={projectId}
-              branch={project.branch}
-              reloadToken={treeToken}
-              activePath={activePath ?? undefined}
-              changedPaths={changedPaths}
-              onFileSelect={openFile}
-            />
-          </ResizablePanel>
+      {/* Main Body */}
+      <div className={`flex-1 flex overflow-hidden ${zenMode ? 'zen-mode' : ''}`}>
+        {/* Activity Bar (Thin Left Panel) */}
+        {!zenMode && (
+          <div className="w-12 border-r border-border bg-background-sidebar flex flex-col items-center py-3 gap-3 shrink-0 z-10 shadow-[1px_0_2px_rgba(0,0,0,0.05)] select-none">
+            <div 
+              className={`activity-bar-btn ${activityView === 'explorer' && sidebarVisible ? 'active' : ''}`}
+              onClick={() => { setActivityView('explorer'); setSidebarVisible(true); }}
+              title="Explorer (Cmd/Ctrl+B)"
+            >
+              <Files size={24} strokeWidth={1.5} />
+            </div>
+            <div 
+              className={`activity-bar-btn ${searchOpen ? 'active' : ''}`}
+              onClick={() => setSearchOpen(true)}
+              title="Search (Cmd/Ctrl+K)"
+            >
+              <Search size={24} strokeWidth={1.5} />
+            </div>
+            <div 
+              className={`activity-bar-btn ${activityView === 'git' && sidebarVisible ? 'active' : ''}`}
+              onClick={() => { setActivityView('git'); setSidebarVisible(true); }}
+              title="Source Control"
+            >
+              <GitBranch size={24} strokeWidth={1.5} />
+            </div>
+            <div className="flex-1" />
+            <div className="activity-bar-btn" onClick={() => setSettingsOpen(true)} title="Settings">
+              <SettingsIcon size={24} strokeWidth={1.5} />
+            </div>
+          </div>
         )}
 
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center bg-background-elevated border-b border-border">
-            <button
-              onClick={() => setSidebarVisible((v) => !v)}
-              className="p-2 hover:bg-background-hover text-text-muted hover:text-text-primary transition-colors"
-              title="Toggle explorer (Cmd/Ctrl+B)"
-            >
-              <PanelLeft size={15} />
-            </button>
-            <div className="flex-1 min-w-0">
-              <EditorTabs tabs={editorTabs} onTabClose={closeTab} onTabSelect={setActivePath} />
-            </div>
-            {activeTab && activeTab.content !== activeTab.original && (
-              <button
-                onClick={saveActive}
-                className="flex items-center gap-1.5 text-xs text-primary hover:bg-background-hover px-3 py-1.5 transition-colors"
-                title="Save (Cmd/Ctrl+S)"
-              >
-                <Save size={13} /> Save
-              </button>
-            )}
-          </div>
-
-          <div className="flex-1 relative min-h-0">
-            {activeTab ? (
-              <Editor
-                height="100%"
-                path={activeTab.path}
-                language={languageFromName(activeTab.name)}
-                theme={theme === 'dark' ? 'vs-dark' : 'light'}
-                value={activeTab.content}
-                onChange={(val) => updateActiveContent(val ?? '')}
-                options={{
-                  fontSize: 14,
-                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                  padding: { top: 12 },
-                  minimap: { enabled: true },
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  smoothScrolling: true,
-                  cursorSmoothCaretAnimation: 'on',
-                  bracketPairColorization: { enabled: true },
-                }}
-              />
-            ) : (
-              <EmptyState
-                className="h-full"
-                icon={<FileCode size={40} />}
-                title="No file open"
-                description="Pick a file from the explorer, or ask the AI to make changes."
-              />
-            )}
-          </div>
-
-          <ResizablePanel
-            direction="vertical"
-            defaultSize={220}
-            minSize={120}
-            maxSize={460}
-            className="border-t border-border"
-          >
-            <div className="flex items-center border-b border-border bg-background-elevated">
-              <button
-                onClick={() => setBottomPanel('timeline')}
-                className={`flex items-center gap-2 px-4 py-2 text-xs font-medium transition-colors ${
-                  bottomPanel === 'timeline'
-                    ? 'text-text-primary border-b-2 border-b-primary'
-                    : 'text-text-muted hover:text-text-primary'
-                }`}
-              >
-                <Bot size={14} /> Agent Timeline
-                {socket.timeline.length > 0 && (
-                  <span className="text-xs bg-background px-1.5 py-0.5 rounded">
-                    {socket.timeline.length}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setBottomPanel('terminal')}
-                className={`flex items-center gap-2 px-4 py-2 text-xs font-medium transition-colors ${
-                  bottomPanel === 'terminal'
-                    ? 'text-text-primary border-b-2 border-b-primary'
-                    : 'text-text-muted hover:text-text-primary'
-                }`}
-              >
-                <TerminalIcon size={14} /> Terminal
-              </button>
-            </div>
-            <div className="h-[calc(100%-37px)]">
-              {bottomPanel === 'timeline' ? (
-                <AgentTimeline events={socket.timeline} />
-              ) : (
-                <Terminal projectId={projectId} agentLogs={socket.commandLogs} />
-              )}
-            </div>
-          </ResizablePanel>
-        </div>
-
-        <ResizablePanel
-          direction="horizontal"
-          defaultSize={380}
-          minSize={300}
-          maxSize={620}
-          className="border-l border-border"
+        <PanelGroup 
+          id="workspace-layout-v5"
+          defaultLayout={workspaceLayout}
+          onLayoutChanged={onWorkspaceLayoutChanged}
+          orientation="horizontal" 
+          className="w-[calc(100vw-48px)] h-full overflow-hidden"
         >
-          <AgentChat
-            messages={socket.messages}
-            status={socket.status}
-            running={socket.running}
-            onSend={handleSend}
-            onReset={socket.reset}
-          />
-        </ResizablePanel>
+          {/* Sidebar */}
+          {sidebarVisible && (
+            <Panel id="sidebar" defaultSize={260} minSize={260} maxSize={500} className="bg-background-sidebar flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-hidden min-h-0 flex flex-col">
+                <div className={activityView === 'explorer' ? 'h-full flex-col flex' : 'hidden'}>
+                  <FileTree
+                    projectId={projectId}
+                    branch={project.branch}
+                    projectName={project.name}
+                    reloadToken={treeToken}
+                    activePath={activePath ?? undefined}
+                    changedPaths={changedPaths}
+                    onFileSelect={openFile}
+                    onCollapse={() => setSidebarVisible(false)}
+                  />
+                </div>
+                <div className={activityView === 'git' ? 'h-full flex-col flex' : 'hidden'}>
+                  <SourceControl
+                    projectId={projectId}
+                    reloadToken={treeToken}
+                    onOpenFile={(path, diff) => diff ? openDiffTab(path) : openFile(path)}
+                  />
+                </div>
+              </div>
+            </Panel>
+          )}
+          {sidebarVisible && (
+            <PanelResizeHandle className="w-[1px] bg-border hover:bg-primary hover:w-[3px] hover:-ml-[1px] transition-all cursor-col-resize relative z-20" />
+          )}
+
+          {/* Editor & Terminal Area */}
+          <Panel id="main" className="flex flex-col bg-background overflow-hidden">
+            <PanelGroup 
+              id="editor-layout-v3"
+              defaultLayout={editorLayout}
+              onLayoutChanged={onEditorLayoutChanged}
+              orientation="vertical" 
+              className="w-full h-full"
+            >
+              <Panel id="editor" className="flex flex-col overflow-hidden">
+                <div className="flex-1 flex min-h-0 min-w-0">
+                  {/* Primary Editor Pane */}
+                  <div className={`flex-1 flex flex-col min-w-0 ${splitMode ? 'border-r border-border' : ''}`} onClick={() => setActiveEditorPane('primary')}>
+                    <div className="flex items-center bg-background border-b border-border h-9 select-none shrink-0">
+                      <div className="w-[calc(100vw-48px)] h-full overflow-hidden">
+                        <EditorTabs tabs={editorTabsPrimary} onTabClose={(p) => closeTab(p, 'primary')} onTabSelect={setActivePath} />
+                      </div>
+                      <div className="flex items-center pr-2 gap-1 shrink-0 bg-background">
+                        <button onClick={() => setSplitMode(!splitMode)} className={`icon-btn ${splitMode ? 'icon-btn-active' : ''}`} title="Split Editor">
+                          <Columns size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 relative min-h-0 min-w-0">
+                      {activeTabPrimary ? (
+                        activeTabPrimary.isDiffView ? (
+                          <DiffEditor
+                            height="100%"
+                            language={languageFromName(activeTabPrimary.name.replace(' (Working Tree)', ''))}
+                            original={activeTabPrimary.original}
+                            modified={activeTabPrimary.content}
+                            theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                            options={{
+                              readOnly: true,
+                              renderSideBySide: true,
+                              minimap: { enabled: false },
+                              fontSize: 13,
+                              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                              scrollBeyondLastLine: false,
+                              automaticLayout: true,
+                              diffWordWrap: 'off',
+                              padding: { top: 16, bottom: 16 },
+                            }}
+                          />
+                        ) : (
+                          <Editor
+                            height="100%"
+                            path={activeTabPrimary.path}
+                            language={languageFromName(activeTabPrimary.name)}
+                            theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                            value={activeTabPrimary.content}
+                            onChange={(val) => updateActiveContent(val ?? '', 'primary')}
+                            onMount={(editor) => {
+                              editor.onDidChangeCursorPosition((e) => {
+                                setCursorPosition({ line: e.position.lineNumber, col: e.position.column });
+                              });
+                            }}
+                            options={{
+                              fontSize: 13,
+                              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                              padding: { top: 16, bottom: 16 },
+                              minimap: { enabled: false },
+                              scrollBeyondLastLine: false,
+                              automaticLayout: true,
+                              smoothScrolling: true,
+                              cursorSmoothCaretAnimation: 'on',
+                              scrollbar: {
+                                verticalScrollbarSize: 8,
+                                horizontalScrollbarSize: 8,
+                              }
+                            }}
+                          />
+                        )
+                      ) : (
+                        <div className="h-full bg-background flex flex-col items-center justify-center p-8 select-none">
+                          <Command size={48} className="text-border mb-6" strokeWidth={1} />
+                          <div className="grid grid-cols-2 gap-x-12 gap-y-3 text-xs text-text-muted">
+                            <div className="flex justify-between w-40"><span>Show Command Palette</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘K</span></div>
+                            <div className="flex justify-between w-40"><span>Toggle Terminal</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘`</span></div>
+                            <div className="flex justify-between w-40"><span>Toggle Sidebar</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘B</span></div>
+                            <div className="flex justify-between w-40"><span>Save File</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘S</span></div>
+                            <div className="flex justify-between w-40 col-span-2 mx-auto mt-2 text-text-primary">
+                              <span>Zen Mode</span><span className="font-semibold px-1.5 py-0.5 rounded bg-primary/20 text-primary border border-primary/30">⌘⇧Z</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Secondary Editor Pane */}
+                  {splitMode && (
+                    <div className="flex-1 flex flex-col min-w-0" onClick={() => setActiveEditorPane('secondary')}>
+                      <div className="flex items-center bg-background border-b border-border h-9 select-none shrink-0">
+                        <div className="w-[calc(100vw-48px)] h-full overflow-hidden">
+                          <EditorTabs tabs={editorTabsSecondary} onTabClose={(p) => closeTab(p, 'secondary')} onTabSelect={setActivePathSecondary} />
+                        </div>
+                        <div className="flex items-center pr-2 gap-1 shrink-0 bg-background">
+                          <button onClick={() => setSplitMode(false)} className="icon-btn" title="Close Split"><Columns size={14} className="opacity-50" /></button>
+                        </div>
+                      </div>
+                      <div className="flex-1 relative min-h-0 min-w-0">
+                        {activeTabSecondary ? (
+                          activeTabSecondary.isDiffView ? (
+                            <DiffEditor
+                              height="100%"
+                              language={languageFromName(activeTabSecondary.name.replace(' (Working Tree)', ''))}
+                              original={activeTabSecondary.original}
+                              modified={activeTabSecondary.content}
+                              theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                              options={{
+                                readOnly: true,
+                                renderSideBySide: true,
+                                minimap: { enabled: false },
+                                fontSize: 13,
+                                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                                scrollBeyondLastLine: false,
+                                automaticLayout: true,
+                                diffWordWrap: 'off',
+                                padding: { top: 16, bottom: 16 },
+                              }}
+                            />
+                          ) : (
+                            <Editor
+                              height="100%"
+                              path={activeTabSecondary.path}
+                              language={languageFromName(activeTabSecondary.name)}
+                              theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                              value={activeTabSecondary.content}
+                              onChange={(val) => updateActiveContent(val ?? '', 'secondary')}
+                              onMount={(editor) => {
+                                editor.onDidChangeCursorPosition((e) => {
+                                  setCursorPositionSecondary({ line: e.position.lineNumber, col: e.position.column });
+                                });
+                              }}
+                              options={{
+                                fontSize: 13,
+                                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                                padding: { top: 16, bottom: 16 },
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                automaticLayout: true,
+                                smoothScrolling: true,
+                                cursorSmoothCaretAnimation: 'on',
+                                scrollbar: {
+                                  verticalScrollbarSize: 8,
+                                  horizontalScrollbarSize: 8,
+                                }
+                              }}
+                            />
+                          )
+                        ) : (
+                          <div className="h-full bg-background flex flex-col items-center justify-center p-8 select-none">
+                            <Command size={48} className="text-border mb-6" strokeWidth={1} />
+                            <div className="grid grid-cols-2 gap-x-12 gap-y-3 text-xs text-text-muted">
+                              <div className="flex justify-between w-40"><span>Show Command Palette</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘K</span></div>
+                              <div className="flex justify-between w-40"><span>Toggle Terminal</span><span className="font-semibold px-1.5 py-0.5 rounded bg-background-elevated border border-border">⌘`</span></div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Panel>
+
+              {bottomPanel !== 'none' && (
+                <PanelResizeHandle className="h-[1px] bg-border hover:bg-primary hover:h-[3px] hover:-mt-[1px] transition-all cursor-row-resize relative z-20" />
+              )}
+              {bottomPanel !== 'none' && (
+                <Panel id="bottom-panel" defaultSize={200} minSize={100} maxSize={500} className="bg-background flex flex-col min-h-[100px] overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-border bg-background-elevated shrink-0 px-2 h-9">
+                    <div className="flex h-full text-[11px] font-semibold text-text-muted uppercase tracking-wider select-none">
+                      <div 
+                        className={`flex items-center gap-1.5 px-3 h-full cursor-pointer hover:text-text-primary ${bottomPanel === 'terminal' ? 'text-primary border-b border-primary' : ''}`}
+                        onClick={() => setBottomPanel('terminal')}
+                      >
+                        Terminal
+                      </div>
+                      <div 
+                        className={`flex items-center gap-1.5 px-3 h-full cursor-pointer hover:text-text-primary ${bottomPanel === 'problems' ? 'text-primary border-b border-primary' : ''}`}
+                        onClick={() => setBottomPanel('problems')}
+                      >
+                        Problems
+                      </div>
+                      <div 
+                        className={`flex items-center gap-1.5 px-3 h-full cursor-pointer hover:text-text-primary ${bottomPanel === 'output' ? 'text-primary border-b border-primary' : ''}`}
+                        onClick={() => setBottomPanel('output')}
+                      >
+                        Output
+                      </div>
+                    </div>
+                    <button onClick={() => setBottomPanel('none')} className="icon-btn" title="Close Panel (Cmd+`)">
+                      <PanelLeft size={13} className="rotate-90" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-hidden min-w-0 min-h-0">
+                    {bottomPanel === 'terminal' && <Terminal projectId={projectId} agentLogs={socket.commandLogs} />}
+                    {bottomPanel === 'problems' && <ProblemsPanel onClose={() => setBottomPanel('none')} />}
+                    {bottomPanel === 'output' && <OutputPanel onClose={() => setBottomPanel('none')} />}
+                  </div>
+                </Panel>
+              )}
+            </PanelGroup>
+          </Panel>
+
+          {assistantVisible && (
+            <PanelResizeHandle className="w-[1px] bg-border hover:bg-primary hover:w-[3px] hover:-ml-[1px] transition-all cursor-col-resize relative z-20" />
+          )}
+
+          {/* AI Assistant Pane */}
+          {assistantVisible && (
+            <Panel id="assistant" defaultSize={400} minSize={360} maxSize={500} className="bg-background-sidebar flex flex-col h-full overflow-hidden">
+              <div className="flex-1 overflow-hidden flex flex-col h-full">
+                <AgentChat
+                  messages={socket.messages}
+                  timeline={socket.timeline}
+                  status={socket.status}
+                  running={socket.running}
+                  onSend={handleSend}
+                  onReset={socket.reset}
+                  onCancel={socket.cancel}
+                />
+              </div>
+            </Panel>
+          )}
+        </PanelGroup>
       </div>
 
-      <StatusBar
-        branch={project.branch}
-        changes={changedPaths.size}
-        running={socket.running}
-        activeFile={activeTab?.path}
-        language={activeTab ? languageFromName(activeTab.name) : undefined}
-      />
+      {!zenMode && (
+        <StatusBar
+          branch={project.branch}
+          changes={changedPaths.size}
+          running={socket.running}
+          activeFile={activeEditorPane === 'primary' ? activeTabPrimary?.path : activeTabSecondary?.path}
+          language={activeEditorPane === 'primary' ? (activeTabPrimary ? languageFromName(activeTabPrimary.name) : undefined) : (activeTabSecondary ? languageFromName(activeTabSecondary.name) : undefined)}
+          project={project}
+          cursorPosition={activeEditorPane === 'primary' ? cursorPosition : cursorPositionSecondary}
+        />
+      )}
 
       <DiffViewer
         open={diffOpen}
@@ -451,11 +685,18 @@ export const Workspace: React.FC = () => {
         onReject={rejectChange}
         onClose={() => setDiffOpen(false)}
       />
-      <SearchModal
-        open={searchOpen}
-        projectId={projectId}
-        onClose={() => setSearchOpen(false)}
-        onOpenFile={(path) => openFile(path)}
+      <SearchModal 
+        open={searchOpen} 
+        projectId={projectId} 
+        onClose={() => setSearchOpen(false)} 
+        onOpenFile={openFile} 
+        onCommand={(cmd) => {
+          if (cmd === 'zen') toggleZenMode();
+          else if (cmd === 'settings') setSettingsOpen(true);
+          else if (cmd === 'sidebar') setSidebarVisible(v => !v);
+          else if (cmd === 'terminal') setBottomPanel(p => p === 'terminal' ? 'none' : 'terminal');
+          else if (cmd === 'diff') setDiffOpen(true);
+        }}
       />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

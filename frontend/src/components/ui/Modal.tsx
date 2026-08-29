@@ -8,6 +8,7 @@ interface ModalProps {
   children: ReactNode;
   icon?: ReactNode;
   widthClass?: string;
+  className?: string;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -17,6 +18,7 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   icon,
   widthClass = 'max-w-lg',
+  className = '',
 }) => {
   useEffect(() => {
     if (!open) return;
@@ -33,7 +35,7 @@ export const Modal: React.FC<ModalProps> = ({
       onClick={onClose}
     >
       <div
-        className={`w-full ${widthClass} panel shadow-panel-lg animate-fade-in-up`}
+        className={`w-full ${widthClass} panel shadow-panel-lg animate-fade-in-up ${className}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">

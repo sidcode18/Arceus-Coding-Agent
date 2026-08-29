@@ -21,6 +21,7 @@ class ProjectResponse(BaseModel):
     last_indexed_at: Optional[str]
     created_at: datetime
     updated_at: datetime
+    metadata_: Dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer('id')
     def serialize_id(self, value: UUID) -> str:

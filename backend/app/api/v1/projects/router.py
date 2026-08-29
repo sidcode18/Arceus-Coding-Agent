@@ -12,23 +12,21 @@ from app.services.repository import repository_manager
 from app.services.search_service import get_search_service
 from app.tools.terminal_tools import TerminalTool
 from app.models.project import Project
+from app.models.user import User
+from app.core.deps import get_current_active_user
 
 router = APIRouter()
-
-# Dummy dependency for current user since auth isn't fully implemented
-async def get_current_user_id() -> str:
-    return "test-user-id"
 
 @router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
     project_in: ProjectCreate,
     db: AsyncSession = Depends(get_async_session),
-    user_id: str = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_active_user)
 ):
     repo = ProjectRepository(db)
     
     project = Project(
-        user_id=user_id,
+        user_id=str(current_user.id),
         name=project_in.name,
         description=project_in.description,
         repository_url=str(project_in.repository_url),
@@ -41,29 +39,28 @@ async def create_project(
     await db.commit()
     await db.refresh(project)
     
-    # Trigger background task for cloning and indexing
-    # We will import the celery task here
-    from app.workers.tasks import clone_and_index_project
-    clone_and_index_project.delay(str(project.id), str(project.repository_url), project.branch)
+    from app.workers.tasks import clone_project
+    clone_project.delay(str(project.id), str(project.repository_url), project.branch, current_user.github_access_token)
     
     return project
 
 @router.get("/", response_model=List[ProjectResponse])
 async def list_projects(
     db: AsyncSession = Depends(get_async_session),
-    user_id: str = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_active_user)
 ):
     repo = ProjectRepository(db)
-    projects = await repo.get_by_user_id(user_id)
+    projects = await repo.get_by_user_id(str(current_user.id))
     return projects
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
     repo = ProjectRepository(db)
-    project = await repo.get_by_id(project_id)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
@@ -71,33 +68,33 @@ async def get_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
     repo = ProjectRepository(db)
-    project = await repo.get_by_id(project_id)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    await repo.delete(project_id)
+    await repo.delete(project_id, user_id=str(current_user.id))
     
-    # Delete local files
     repository_manager.delete_repository(project_id)
-    
-    # Note: We should ideally also delete embeddings from Qdrant here
-    # search_service.delete_project_embeddings(project_id)
 
 @router.get("/{project_id}/tree")
 async def get_project_tree(
     project_id: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
-    # Verify project exists
     repo = ProjectRepository(db)
-    project = await repo.get_by_id(project_id)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
     try:
+        if project.index_status == "cloning" or project.index_status == "pending":
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "cloning"})
         return repository_manager.get_file_tree(project_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Local repository not found")
@@ -106,8 +103,14 @@ async def get_project_tree(
 async def get_project_file(
     project_id: str,
     path: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     try:
         content = await repository_manager.read_file(project_id, path)
         return {"path": path, "content": content}
@@ -121,25 +124,52 @@ async def update_project_file(
     project_id: str,
     path: str,
     request: FileWriteRequest,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     try:
         await repository_manager.write_file(project_id, path, request.content)
         
-        # Trigger re-index of this specific file
-        from app.workers.tasks import index_file
-        index_file.delay(project_id, path)
+        from app.workers.tasks import prioritize_file
+        prioritize_file.delay(project_id, path)
         
         return {"status": "success", "path": path}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.post("/{project_id}/file/prioritize")
+async def prioritize_project_file(
+    project_id: str,
+    path: str,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
+):
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    from app.workers.tasks import prioritize_file
+    prioritize_file.delay(project_id, path)
+    return {"status": "prioritized", "path": path}
+
 @router.delete("/{project_id}/file")
 async def delete_project_file(
     project_id: str,
     path: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
+    repo = ProjectRepository(db)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     try:
         success = repository_manager.delete_file(project_id, path)
         if not success:
@@ -152,10 +182,11 @@ async def delete_project_file(
 async def search_project(
     project_id: str,
     query: SearchQuery,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
     repo = ProjectRepository(db)
-    project = await repo.get_by_id(project_id)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
@@ -167,15 +198,11 @@ async def search_project(
 async def run_terminal_command(
     project_id: str,
     request: TerminalCommandRequest,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_active_user)
 ):
-    """Run a shell command inside the project's cloned workspace.
-
-    Reuses the agent's TerminalTool so commands execute in the same isolated
-    workspace with the same safety policy.
-    """
     repo = ProjectRepository(db)
-    project = await repo.get_by_id(project_id)
+    project = await repo.get_by_id(project_id, user_id=str(current_user.id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

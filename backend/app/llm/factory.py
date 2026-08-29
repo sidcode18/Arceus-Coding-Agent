@@ -2,14 +2,16 @@ from typing import Dict, Type
 
 from app.llm.base import LLMProvider
 from app.llm.gemini import GeminiProvider
+from app.llm.openai import OpenAIProvider
+from app.llm.anthropic import AnthropicProvider
 
 class LLMFactory:
     """Factory to create LLM providers"""
     
     _providers: Dict[str, Type[LLMProvider]] = {
         "gemini": GeminiProvider,
-        # "openai": OpenAIProvider,
-        # "anthropic": AnthropicProvider,
+        "openai": OpenAIProvider,
+        "anthropic": AnthropicProvider,
     }
     
     @classmethod

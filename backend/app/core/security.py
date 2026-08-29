@@ -11,18 +11,20 @@ from app.core.config import settings
 from app.core.exceptions import AuthenticationError
 
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+import bcrypt
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        plain_password.encode('utf-8'), 
+        hashed_password.encode('utf-8')
+    )
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password"""
-    return pwd_context.hash(password)
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 
 def create_access_token(
@@ -50,6 +52,8 @@ def create_access_token(
     return encoded_jwt
 
 
+import uuid
+
 def create_refresh_token(data: dict) -> str:
     """Create a JWT refresh token"""
     to_encode = data.copy()
@@ -58,7 +62,11 @@ def create_refresh_token(data: dict) -> str:
         days=settings.jwt_refresh_token_expire_days
     )
     
-    to_encode.update({"exp": expire, "type": "refresh"})
+    to_encode.update({
+        "exp": expire, 
+        "type": "refresh",
+        "jti": str(uuid.uuid4())
+    })
     
     encoded_jwt = jwt.encode(
         to_encode,

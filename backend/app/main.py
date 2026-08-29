@@ -33,6 +33,8 @@ app = FastAPI(
 
 app.include_router(api_router, prefix="/api/v1")
 
+from starlette.middleware.sessions import SessionMiddleware
+
 # CORS middleware
 if settings.cors_origins:
     app.add_middleware(
@@ -42,6 +44,15 @@ if settings.cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.jwt_secret,
+    session_cookie="arceus_oauth_session",
+    max_age=3600,
+    same_site="lax",
+    https_only=False
+)
 
 @app.get("/health")
 async def health_check():

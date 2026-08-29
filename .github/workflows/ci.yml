@@ -40,13 +40,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-asyncio httpx
-    - name: Run tests
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5433/ai_coding_agent
-        REDIS_URL: redis://localhost:6379/0
+    - name: Install test dependencies
       run: |
         cd backend
-        PYTHONPATH=. pytest tests/
+        pip install pytest pytest-asyncio httpx
+    - name: Run unit tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5433/ai_coding_agent
+        REDIS_URL: redis://localhost:6379/0
+        # GOOGLE_API_KEY intentionally NOT set — unit tests must pass without it.
+        # Integration tests (marked with @pytest.mark.integration) are automatically
+        # skipped when GOOGLE_API_KEY is absent.
+      run: |
+        cd backend
+        PYTHONPATH=. pytest tests/ -m "not integration" -v
 
   frontend-build:
     runs-on: ubuntu-latest

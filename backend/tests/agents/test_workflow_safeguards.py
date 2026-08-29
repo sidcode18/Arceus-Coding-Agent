@@ -81,34 +81,34 @@ def _make_search_result(score: float, file_path: str = "src/foo.py") -> dict:
 
 class TestBuildInitialState:
     def test_all_safeguard_fields_present(self):
-        state = build_initial_state("task", "proj-1")
+        state = build_initial_state("task", "proj-1", "user-1")
         assert "iteration_count" in state
         assert "retry_count" in state
         assert "started_at" in state
         assert "termination_reason" in state
 
     def test_counters_start_at_zero(self):
-        state = build_initial_state("task", "proj-1")
+        state = build_initial_state("task", "proj-1", "user-1")
         assert state["iteration_count"] == 0
         assert state["retry_count"] == 0
 
     def test_termination_reason_empty(self):
-        state = build_initial_state("task", "proj-1")
+        state = build_initial_state("task", "proj-1", "user-1")
         assert state["termination_reason"] == ""
 
     def test_started_at_is_recent(self):
         before = time.monotonic()
-        state = build_initial_state("task", "proj-1")
+        state = build_initial_state("task", "proj-1", "user-1")
         after = time.monotonic()
         assert before <= state["started_at"] <= after
 
     def test_message_present(self):
-        state = build_initial_state("hello world", "p1")
+        state = build_initial_state("hello world", "p1", "user-1")
         assert len(state["messages"]) == 1
         assert state["messages"][0].content == "hello world"
 
     def test_project_id_set(self):
-        state = build_initial_state("t", "my-project")
+        state = build_initial_state("t", "my-project", "user-1")
         assert state["project_id"] == "my-project"
 
 

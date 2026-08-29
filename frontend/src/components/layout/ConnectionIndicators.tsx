@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Server, Radio, Sparkles } from 'lucide-react';
+import { Server } from 'lucide-react';
 import { API_BASE } from '../../api/client';
 import type { SocketStatus } from '../../hooks/useAgentSocket';
 import axios from 'axios';
 
-interface Props {
-  wsStatus: SocketStatus;
-}
+interface Props {}
 
 type Health = 'up' | 'down' | 'checking';
 
@@ -16,9 +14,8 @@ const dot = (h: Health | SocketStatus) => {
   return 'bg-error';
 };
 
-export const ConnectionIndicators: React.FC<Props> = ({ wsStatus }) => {
+export const ConnectionIndicators: React.FC<Props> = () => {
   const [backend, setBackend] = useState<Health>('checking');
-  const [agents, setAgents] = useState<Health>('checking');
 
   useEffect(() => {
     let active = true;
@@ -28,12 +25,6 @@ export const ConnectionIndicators: React.FC<Props> = ({ wsStatus }) => {
         if (active) setBackend('up');
       } catch {
         if (active) setBackend('down');
-      }
-      try {
-        await axios.get(`${API_BASE}/api/v1/agents/health`, { timeout: 4000 });
-        if (active) setAgents('up');
-      } catch {
-        if (active) setAgents('down');
       }
     };
     check();
@@ -69,18 +60,6 @@ export const ConnectionIndicators: React.FC<Props> = ({ wsStatus }) => {
         label="Backend"
         state={backend}
         title={`Backend API: ${backend}`}
-      />
-      <Item
-        icon={<Radio size={14} className="text-text-muted" />}
-        label="WebSocket"
-        state={wsStatus}
-        title={`Agent WebSocket: ${wsStatus}`}
-      />
-      <Item
-        icon={<Sparkles size={14} className="text-text-muted" />}
-        label="Gemini"
-        state={agents}
-        title="Gemini/agent subsystem (key configured server-side)"
       />
     </div>
   );

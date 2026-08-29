@@ -41,7 +41,7 @@ class Settings(BaseSettings):
         return bool(v)
     
     # Frontend
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:5173"
     
     # Backend
     backend_url: str = "http://localhost:8000"
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     otel_service_name: str = Field(default="ai-coding-agent-backend")
     
     # Repository
-    repository_clone_path: str = Field(default="/repositories")
+    repository_clone_path: str = Field(default="storage/repositories")
     repository_max_size: int = Field(default=104857600)  # 100MB
     
     # Tool Execution

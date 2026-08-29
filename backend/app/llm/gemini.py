@@ -12,6 +12,8 @@ T = TypeVar("T", bound=BaseModel)
 logger = structlog.get_logger()
 
 
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 def _to_gemini_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
     """Unwrap an OpenAI-style tool schema into a flat function declaration.
 
@@ -51,6 +53,7 @@ class GeminiProvider(LLMProvider):
             )
         return self._llm_instance
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
     async def generate(
         self,
         messages: List[BaseMessage],
@@ -67,6 +70,7 @@ class GeminiProvider(LLMProvider):
         response = await model.ainvoke(messages)
         return response
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
     async def generate_structured(
         self,
         messages: List[BaseMessage],

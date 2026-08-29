@@ -7,10 +7,13 @@ from app.models.user import User
 from app.repositories.base import BaseRepository
 
 
+from datetime import datetime
+
 class UserCreate(BaseModel):
-    github_id: str
+    github_id: str | None = None
     username: str
     email: str
+    hashed_password: str | None = None
     avatar_url: str | None = None
     full_name: str | None = None
     bio: str | None = None
@@ -19,12 +22,13 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None
+    hashed_password: str | None = None
     avatar_url: str | None = None
     full_name: str | None = None
     bio: str | None = None
     is_active: bool | None = None
     is_superuser: bool | None = None
-    last_login_at: str | None = None
+    last_login_at: datetime | None = None
 
 
 class UserRepository(BaseRepository[User, UserCreate, UserUpdate]):

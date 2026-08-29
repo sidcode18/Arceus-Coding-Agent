@@ -71,27 +71,50 @@ class SearchService:
             raise
 
     async def index_chunk(self, chunk: Dict[str, Any], project_id: str):
-        """Index a code chunk"""
-        text = chunk["content"]
-        vector = self.embeddings.embed_query(text)
+        """Index a single code chunk (legacy wrapper)."""
+        await self.index_chunks([chunk], project_id)
         
-        # Store the chunk content alongside its metadata so retrieval can
-        # surface the actual code, not just its location.
-        metadata = {**chunk["metadata"], "content": text, "project_id": project_id}
+    async def index_chunks(self, chunks: List[Dict[str, Any]], project_id: str):
+        """Index multiple code chunks in a single batched operation with retry logic."""
+        if not chunks:
+            return
+            
+        texts = [chunk["content"] for chunk in chunks]
         
+        import asyncio
         import uuid
-        point_id = str(uuid.uuid4())
+        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
         
-        self.qdrant.upsert(
-            collection_name=self.collection_name,
-            points=[
-                rest.PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload=metadata
-                )
-            ]
+        @retry(
+            stop=stop_after_attempt(5),
+            wait=wait_exponential(multiplier=1, min=2, max=30),
+            reraise=True
         )
+        def _sync_embed_and_upsert():
+            # Batch embedding
+            if hasattr(self.embeddings, "embed_documents"):
+                vectors = self.embeddings.embed_documents(texts)
+            else:
+                vectors = [self.embeddings.embed_query(t) for t in texts]
+                
+            points = []
+            for i, chunk in enumerate(chunks):
+                metadata = {**chunk["metadata"], "content": texts[i], "project_id": project_id}
+                points.append(
+                    rest.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=vectors[i],
+                        payload=metadata
+                    )
+                )
+                
+            # Batch upsert
+            self.qdrant.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+            
+        await asyncio.to_thread(_sync_embed_and_upsert)
         
     async def semantic_search(self, query: str, project_id: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         logger.info("Performing semantic search", query=query, project_id=project_id)

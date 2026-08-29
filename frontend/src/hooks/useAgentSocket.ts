@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { WS_BASE } from '../api/client';
+import { WS_BASE, getAccessToken } from '../api/client';
 import type { AgentEvent, AgentNode, CodeChange, TerminalResult } from '../api/types';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected';
@@ -46,6 +46,7 @@ interface UseAgentSocketResult {
   dismissChange: (filePath: string) => void;
   clearChanges: () => void;
   reset: () => void;
+  cancel: () => void;
 }
 
 export function useAgentSocket(sessionId: string): UseAgentSocketResult {
@@ -167,17 +168,35 @@ export function useAgentSocket(sessionId: string): UseAgentSocketResult {
   );
 
   const connect = useCallback(() => {
-    const url = `${WS_BASE}/api/v1/websocket/ws/${sessionId}`;
+    const token = getAccessToken();
+    const url = `${WS_BASE}/api/v1/websocket/ws/${sessionId}${token ? `?token=${token}` : ''}`;
     setStatus('connecting');
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => setStatus('connected');
-    ws.onclose = () => {
+    ws.onclose = async (event) => {
       setStatus('disconnected');
-      if (!closedByUs.current) {
-        reconnectTimer.current = setTimeout(connect, 2000);
+      if (closedByUs.current) return;
+      
+      // 1008 Policy Violation usually means invalid/expired token
+      if (event.code === 1008) {
+        try {
+          // Trigger a lightweight auth check which forces the Axios interceptor
+          // to refresh the token if it's expired.
+          const { api } = await import('../api/client');
+          await api.getMe();
+          // After a successful refresh, try connecting immediately
+          connect();
+          return;
+        } catch (err) {
+          // If refresh fails, it will dispatch the logout event internally
+          return;
+        }
       }
+
+      // Reconnect with backoff for normal unexpected closures
+      reconnectTimer.current = setTimeout(connect, 2000);
     };
     ws.onerror = () => ws.close();
     ws.onmessage = (e) => {
@@ -204,7 +223,14 @@ export function useAgentSocket(sessionId: string): UseAgentSocketResult {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return false;
       pushMessage({ kind: 'user', content: message });
-      ws.send(JSON.stringify({ message, project_id: projectId }));
+      const llmProvider = localStorage.getItem('llm_provider') || 'gemini';
+      const llmModel = localStorage.getItem('llm_model') || '';
+      ws.send(JSON.stringify({ 
+          message, 
+          project_id: projectId,
+          llm_provider: llmProvider,
+          llm_model: llmModel
+      }));
       return true;
     },
     [pushMessage],
@@ -223,6 +249,12 @@ export function useAgentSocket(sessionId: string): UseAgentSocketResult {
     setCommandLogs([]);
   }, []);
 
+  const cancel = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'cancel' }));
+  }, []);
+
   return {
     status,
     running,
@@ -234,5 +266,6 @@ export function useAgentSocket(sessionId: string): UseAgentSocketResult {
     dismissChange,
     clearChanges,
     reset,
+    cancel,
   };
 }

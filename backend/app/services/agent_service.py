@@ -23,16 +23,29 @@ class AgentService:
         return self._workflow
 
     async def execute_task(
-        self, task_prompt: str, session_id: str, project_id: Optional[str] = None
+        self, 
+        task_prompt: str, 
+        session_id: str, 
+        user_id: str, 
+        project_id: Optional[str] = None,
+        llm_provider: str = "",
+        llm_model: str = ""
     ) -> Dict[str, Any]:
         logger.info(
             "Executing task via AgentService",
             task=task_prompt,
             session_id=session_id,
             project_id=project_id,
+            provider=llm_provider,
         )
 
-        initial_state = build_initial_state(task_prompt, project_id or "")
+        initial_state = build_initial_state(
+            message=task_prompt, 
+            project_id=project_id or "", 
+            user_id=user_id,
+            llm_provider=llm_provider,
+            llm_model=llm_model
+        )
         wall_start = time.monotonic()
         final_state = await self._get_workflow().ainvoke(initial_state)
         elapsed = time.monotonic() - wall_start

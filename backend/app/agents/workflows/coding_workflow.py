@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     plan: str
     plan_steps: list
     retrieved_context: list
+    memory_context: list
     code_changes: list
     review_status: str
     review_content: str
@@ -48,6 +49,9 @@ class AgentState(TypedDict):
     status: str
     errors: list
     project_id: str
+    user_id: str
+    llm_provider: str
+    llm_model: str
     # --- execution metrics / safeguard counters ---
     iteration_count: int        # incremented each time retriever fires
     retry_count: int            # incremented each time coder re-runs after reviewer
@@ -176,10 +180,11 @@ def create_coding_workflow():
     reviewer_agent = ReviewerAgent()
     reflection_agent = ReflectionAgent()
 
-    # Thin lambda closures capture the agent instance
-    workflow.add_node("retriever", lambda s: _retriever_node(s, retriever_agent))
+    from functools import partial
+
+    workflow.add_node("retriever", partial(_retriever_node, agent=retriever_agent))
     workflow.add_node("planner", planner_agent.ainvoke)
-    workflow.add_node("coder", lambda s: _coder_node(s, coder_agent))
+    workflow.add_node("coder", partial(_coder_node, agent=coder_agent))
     workflow.add_node("reviewer", reviewer_agent.ainvoke)
     workflow.add_node("reflection", reflection_agent.ainvoke)
 
@@ -211,7 +216,13 @@ def create_coding_workflow():
 # AgentService so the new fields are always populated consistently)
 # ---------------------------------------------------------------------------
 
-def build_initial_state(message: str, project_id: str) -> dict:
+def build_initial_state(
+    message: str, 
+    project_id: str, 
+    user_id: str,
+    llm_provider: str = "",
+    llm_model: str = ""
+) -> dict:
     """Return a fresh AgentState dict with all safeguard fields initialised."""
     from langchain_core.messages import HumanMessage  # local import avoids circulars
     return {
@@ -219,6 +230,7 @@ def build_initial_state(message: str, project_id: str) -> dict:
         "plan": "",
         "plan_steps": [],
         "retrieved_context": [],
+        "memory_context": [],
         "code_changes": [],
         "review_status": "",
         "review_content": "",
@@ -227,6 +239,9 @@ def build_initial_state(message: str, project_id: str) -> dict:
         "status": "starting",
         "errors": [],
         "project_id": project_id,
+        "user_id": user_id,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
         # safeguard fields — always start from zero
         "iteration_count": 0,
         "retry_count": 0,

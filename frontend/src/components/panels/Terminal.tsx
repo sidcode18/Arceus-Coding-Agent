@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal as TerminalIcon, Loader2, Trash2, Bot } from 'lucide-react';
+import { Loader2, Trash2, Bot, ChevronRight, Copy, Check } from 'lucide-react';
+import Ansi from 'ansi-to-react';
 import { api, extractError } from '../../api/client';
 import type { AgentCommandLog } from '../../hooks/useAgentSocket';
 
@@ -20,16 +21,17 @@ const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 export const Terminal: React.FC<TerminalProps> = ({ projectId, agentLogs }) => {
   const [lines, setLines] = useState<Line[]>([
-    { id: uid(), type: 'success', content: `Workspace shell ready — commands run inside the cloned repository.`, timestamp: now() },
+    { id: uid(), type: 'success', content: `Arceus Shell v2.0 ready.`, timestamp: now() },
   ]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const processedAgentLogs = useRef(0);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [lines]);
+  }, [lines, running]);
 
   // Append newly-arrived agent command executions.
   useEffect(() => {
@@ -38,7 +40,7 @@ export const Terminal: React.FC<TerminalProps> = ({ projectId, agentLogs }) => {
     processedAgentLogs.current = agentLogs.length;
     const newLines: Line[] = [];
     for (const log of fresh) {
-      newLines.push({ id: uid(), type: 'agent', content: `agent $ ${log.command}`, timestamp: now() });
+      newLines.push({ id: uid(), type: 'agent', content: log.command, timestamp: now() });
       if (log.stdout?.trim()) newLines.push({ id: uid(), type: 'output', content: log.stdout.trimEnd(), timestamp: now() });
       if (log.stderr?.trim()) newLines.push({ id: uid(), type: 'error', content: log.stderr.trimEnd(), timestamp: now() });
     }
@@ -49,7 +51,7 @@ export const Terminal: React.FC<TerminalProps> = ({ projectId, agentLogs }) => {
     const command = input.trim();
     if (!command || running) return;
     setInput('');
-    setLines((prev) => [...prev, { id: uid(), type: 'command', content: `$ ${command}`, timestamp: now() }]);
+    setLines((prev) => [...prev, { id: uid(), type: 'command', content: command, timestamp: now() }]);
     setRunning(true);
     try {
       const result = await api.runCommand(projectId, command);
@@ -59,7 +61,7 @@ export const Terminal: React.FC<TerminalProps> = ({ projectId, agentLogs }) => {
       out.push({
         id: uid(),
         type: result.exit_code === 0 ? 'success' : 'error',
-        content: `exit code ${result.exit_code}`,
+        content: `Exited with code ${result.exit_code}`,
         timestamp: now(),
       });
       setLines((prev) => [...prev, ...out]);
@@ -69,57 +71,80 @@ export const Terminal: React.FC<TerminalProps> = ({ projectId, agentLogs }) => {
       setRunning(false);
     }
   };
+  
+  const copyOutput = (content: string, id: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  };
 
   const colors: Record<Line['type'], string> = {
-    command: 'text-primary',
-    output: 'text-text-primary',
+    command: 'text-primary font-semibold',
+    output: 'text-[#d4d4d4]',
     error: 'text-error',
     success: 'text-success',
-    agent: 'text-warning',
+    agent: 'text-warning font-semibold',
   };
 
   return (
-    <div className="flex flex-col h-full bg-background-panel">
-      <div className="flex items-center justify-between px-3 h-8 border-b border-border bg-background-elevated">
-        <div className="flex items-center gap-2 text-xs font-medium text-text-primary">
-          <TerminalIcon size={13} /> Terminal
-        </div>
+    <div className="flex flex-col h-full bg-background font-mono text-[12px] relative w-full overflow-hidden">
+      <div className="flex justify-end px-3 py-1 bg-background">
         <button
           onClick={() => setLines([])}
-          className="p-1 hover:bg-background-hover rounded transition-colors text-text-muted hover:text-text-primary"
-          title="Clear"
+          className="p-1 hover:bg-bg-hover rounded transition-colors text-text-muted hover:text-text-primary"
+          title="Clear Terminal"
         >
-          <Trash2 size={13} />
+          <Trash2 size={12} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 font-mono text-xs space-y-1">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {lines.map((line) => (
-          <div key={line.id} className="flex gap-2">
-            <span className="text-text-muted shrink-0">{line.timestamp}</span>
-            {line.type === 'agent' && <Bot size={12} className="text-warning shrink-0 mt-0.5" />}
-            <span className={`${colors[line.type]} whitespace-pre-wrap break-all`}>{line.content}</span>
+          <div key={line.id} className="group flex flex-col gap-0.5 hover:bg-white/[0.04] px-2 py-1 rounded transition-colors relative w-full max-w-full">
+            <div className="flex items-start gap-2 max-w-full">
+              {line.type === 'command' && <ChevronRight size={12} className="text-primary shrink-0 mt-[2px]" />}
+              {line.type === 'agent' && <Bot size={12} className="text-warning shrink-0 mt-[2px]" />}
+              {line.type !== 'command' && line.type !== 'agent' && <div className="w-[12px] shrink-0" />}
+              
+              <div className={`flex-1 min-w-0 break-all whitespace-pre-wrap leading-relaxed ${colors[line.type]}`}>
+                {line.type === 'output' || line.type === 'error' ? (
+                  <Ansi>{line.content}</Ansi>
+                ) : (
+                  line.content
+                )}
+              </div>
+            </div>
+            
+            {(line.type === 'output' || line.type === 'error') && (
+              <button
+                onClick={() => copyOutput(line.content, line.id)}
+                className="absolute top-1 right-2 p-1.5 rounded bg-background-elevated border border-border text-text-muted hover:text-text-primary opacity-0 group-hover:opacity-100 transition-all shadow-sm"
+                title="Copy output"
+              >
+                {copiedId === line.id ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+              </button>
+            )}
           </div>
         ))}
         {running && (
-          <div className="flex items-center gap-2 text-text-muted">
-            <Loader2 size={12} className="animate-spin" /> running…
+          <div className="flex items-center gap-2 text-text-muted ml-6 pl-1 pb-2">
+            <Loader2 size={10} className="animate-spin" /> running…
           </div>
         )}
-        <div ref={scrollRef} />
+        <div ref={scrollRef} className="h-2" />
       </div>
 
-      <div className="p-2 border-t border-border bg-background-elevated">
-        <div className="flex items-center gap-2 bg-background border border-border rounded-md px-3 py-2 focus-within:border-primary transition-colors">
-          <span className="text-primary font-mono text-xs">$</span>
+      <div className="px-3 pb-3 pt-1 bg-background">
+        <div className="flex items-center gap-2 bg-background-elevated border border-border rounded px-2 py-1 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/30 transition-all shadow-inner">
+          <ChevronRight size={12} className="text-primary" />
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && runCommand()}
-            placeholder="Run a command in the workspace…"
+            placeholder="Run a command..."
             disabled={running}
-            className="flex-1 bg-transparent border-none outline-none text-text-primary placeholder-text-muted font-mono text-xs disabled:opacity-50"
+            className="flex-1 bg-transparent border-none outline-none text-text-primary placeholder-text-muted font-mono text-[12px] disabled:opacity-50"
           />
         </div>
       </div>

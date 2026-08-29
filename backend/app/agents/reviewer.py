@@ -52,7 +52,6 @@ class ReviewerAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("reviewer")
-        self._init_llm()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Review the code changes made by the Coder agent."""
@@ -107,7 +106,7 @@ class ReviewerAgent(BaseAgent):
         try:
             # Use structured output — the LLM is forced to return a ReviewOutput
             # JSON object; no keyword scanning needed.
-            review_output: ReviewOutput = await self.llm.generate_structured(
+            review_output: ReviewOutput = await self.get_llm(state).generate_structured(
                 review_messages, schema=ReviewOutput
             )
 

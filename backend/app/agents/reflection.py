@@ -37,6 +37,10 @@ class ReflectionOutput(BaseModel):
     reasoning: str = Field(
         description="Explanation for the chosen action."
     )
+    new_memory: str | None = Field(
+        default=None,
+        description="Optional memory fragment (e.g. user preference, coding style rule, corrected mistake) to persist for future tasks."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +53,6 @@ class ReflectionAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("reflection")
-        self._init_llm()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Reflect on the current state and determine if corrections are needed."""
@@ -101,7 +104,7 @@ class ReflectionAgent(BaseAgent):
         try:
             # Use structured output — action is guaranteed to be one of the
             # Literal values; no brittle keyword scan needed.
-            reflection_output: ReflectionOutput = await self.llm.generate_structured(
+            reflection_output: ReflectionOutput = await self.get_llm(state).generate_structured(
                 reflection_messages, schema=ReflectionOutput
             )
 
@@ -115,6 +118,18 @@ class ReflectionAgent(BaseAgent):
                 f"**Action:** {reflection_output.action}\n\n"
                 f"**Reasoning:** {reflection_output.reasoning}"
             )
+            
+            if reflection_output.new_memory:
+                reflection_text += f"\n\n**Extracted Memory:** {reflection_output.new_memory}"
+                from app.services.memory_service import memory_service
+                user_id = state.get("user_id")
+                project_id = state.get("project_id")
+                if user_id:
+                    try:
+                        await memory_service.add_memory(user_id=user_id, project_id=project_id, content=reflection_output.new_memory)
+                        logger.info("ReflectionAgent saved new memory")
+                    except Exception as e:
+                        logger.error("ReflectionAgent failed to save memory", error=str(e))
 
             return {
                 "messages": [AIMessage(content=reflection_text)],
@@ -123,9 +138,17 @@ class ReflectionAgent(BaseAgent):
             }
 
         except Exception as e:
-            logger.error("ReflectionAgent failed to analyze", error=str(e))
+            error_str = str(e)
+            logger.error("ReflectionAgent failed to analyze", error=error_str)
+            
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                return {
+                    "reflection_action": "continue",
+                    "reflection_content": "Rate limit exceeded, skipping reflection to preserve quota.",
+                }
+                
             return {
-                "messages": [AIMessage(content=f"Reflection failed: {str(e)}")],
+                "messages": [AIMessage(content=f"Reflection failed: {error_str}")],
                 "reflection_action": "continue",  # safe default on error
-                "reflection_content": str(e),
+                "reflection_content": error_str,
             }

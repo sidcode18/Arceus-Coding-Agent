@@ -14,7 +14,6 @@ class RetrievalAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("retriever")
-        self._init_llm()
         # search_service also deferred: get_search_service() connects to Qdrant
         # at construction time.  We call it lazily on first ainvoke instead.
         self._search_service = None
@@ -37,15 +36,25 @@ class RetrievalAgent(BaseAgent):
         messages = state.get("messages", [])
         project_id = state.get("project_id")
 
+        from app.services.memory_service import memory_service
+        user_id = state.get("user_id")
+
         if not project_id:
             logger.warning("No project_id provided for retrieval")
-            return {"messages": [], "retrieved_context": []}
+            return {"messages": [], "retrieved_context": [], "memory_context": []}
 
         # Extract the latest user message to use as search query
         user_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
         if not user_messages:
             logger.warning("No user messages found for retrieval")
-            return {"messages": [], "retrieved_context": []}
+            return {"messages": [], "retrieved_context": [], "memory_context": []}
+            
+        memory_context = []
+        if user_id:
+            try:
+                memory_context = await memory_service.get_context(user_id, project_id)
+            except Exception as e:
+                logger.error("Failed to fetch memory", error=str(e))
 
         query = user_messages[-1].content
 
@@ -84,6 +93,10 @@ class RetrievalAgent(BaseAgent):
                 discarded=discarded,
                 min_score=min_score,
                 project_id=project_id,
+                workspace_id=user_id, # Frontend sets workspace context as user_id for isolation
+                collection_queried=self.search_service.collection_name,
+                similarity_scores=[c["score"] for c in retrieved_context],
+                files_returned=[c["file_path"] for c in retrieved_context]
             )
 
             if retrieved_context:
@@ -92,21 +105,26 @@ class RetrievalAgent(BaseAgent):
                     f"from the repository (discarded {discarded} below score "
                     f"{min_score:.2f})."
                 )
+                if memory_context:
+                    summary += f" Also loaded {len(memory_context)} memory items."
                 return {
                     "messages": [AIMessage(content=summary)],
                     "retrieved_context": retrieved_context,
+                    "memory_context": memory_context,
                 }
             else:
                 msg = (
-                    f"No relevant code found above the relevance threshold "
-                    f"({min_score:.2f}). All {discarded} result(s) were below the "
-                    "minimum score."
+                    f"Repository indexing appears to be unavailable or incomplete. "
+                    f"No relevant code could be retrieved above the threshold ({min_score:.2f})."
                     if discarded
-                    else "No code found in the repository index."
+                    else "Repository indexing appears to be unavailable or incomplete. No code found in the repository index."
                 )
+                if memory_context:
+                    msg += f" Loaded {len(memory_context)} memory items."
                 return {
                     "messages": [AIMessage(content=msg)],
                     "retrieved_context": [],
+                    "memory_context": memory_context,
                 }
 
         except Exception as e:
@@ -114,4 +132,5 @@ class RetrievalAgent(BaseAgent):
             return {
                 "messages": [AIMessage(content=f"Retrieval failed: {str(e)}")],
                 "retrieved_context": [],
+                "memory_context": memory_context,
             }

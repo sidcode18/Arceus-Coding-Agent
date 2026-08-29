@@ -14,7 +14,6 @@ class CoderAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("coder")
-        self._init_llm()
         self.tool_registry = ToolRegistry()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -54,6 +53,11 @@ class CoderAgent(BaseAgent):
         # the plan — placing relevant code high in the context window.
         context_parts = []
 
+        memory_context = state.get("memory_context", [])
+        if memory_context:
+            mem_text = "\n".join(f"- {m}" for m in memory_context)
+            context_parts.append(f"## Memory & User Preferences\n\n{mem_text}")
+
         context_block = _format_retrieved_context(retrieved_context)
         if context_block:
             context_parts.append(context_block)
@@ -88,7 +92,7 @@ class CoderAgent(BaseAgent):
         try:
             tool_schemas = self.tool_registry.get_openai_schemas()
 
-            response = await self.llm.generate(
+            response = await self.get_llm(state).generate(
                 coding_messages,
                 tools=tool_schemas,
             )

@@ -37,7 +37,6 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("planner")
-        self._init_llm()
 
     async def ainvoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a plan for the given task"""
@@ -59,11 +58,17 @@ class PlannerAgent(BaseAgent):
             "4. Dependencies between steps\n"
             "5. Potential risks or edge cases\n\n"
             "Format your plan as a numbered list of specific, actionable steps. "
-            "Reference concrete file paths from the retrieved context wherever relevant."
+            "Reference concrete file paths from the retrieved context wherever relevant.\n"
+            "CRITICAL: If no repository context is retrieved, do NOT ask the user to summarize their codebase or provide file contents. Make a best-effort plan based solely on the request."
         )
 
         # Build context — now includes full code snippets, not just file names
         context_parts = []
+
+        memory_context = state.get("memory_context", [])
+        if memory_context:
+            mem_text = "\n".join(f"- {m}" for m in memory_context)
+            context_parts.append(f"## Memory & User Preferences\n\n{mem_text}")
 
         context_block = _format_retrieved_context(retrieved_context)
         if context_block:
@@ -74,7 +79,7 @@ class PlannerAgent(BaseAgent):
             )
         else:
             context_parts.append(
-                "_No repository context was retrieved. Plan based on the request alone._"
+                "_No repository context was retrieved. Plan based on the request alone. Do NOT ask the user for their codebase._"
             )
 
         user_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
@@ -90,7 +95,7 @@ class PlannerAgent(BaseAgent):
         ]
 
         try:
-            plan_response = await self.llm.generate(planning_messages)
+            plan_response = await self.get_llm(state).generate(planning_messages)
             logger.info("PlannerAgent generated plan")
 
             plan_content = plan_response.content
